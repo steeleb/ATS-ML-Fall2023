@@ -63,7 +63,7 @@ And now the RS surface temperature
 ```{r}
 ggplot(NW_estimates, aes(x = date, y = med_SurfaceTemp)) +
   geom_point() +
-  facet_grid(GNIS_Name ~ .) +
+  facet_grid(feature ~ .) +
   theme_bw()
 ```
 

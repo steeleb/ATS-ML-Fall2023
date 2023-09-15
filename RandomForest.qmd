@@ -9,7 +9,7 @@ editor:
     theme: sky
 ---
 
-```{r env-set-up, echo=FALSE}
+```{r env-set-up, echo=FALSE, message=FALSE}
 library(tidyverse)
 library(reticulate)
 
@@ -30,7 +30,6 @@ NW_estimates <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/remoteSensin
 all_NW_temp <- full_join(surf_temp, NW_estimates)
 
 # weather data
-list.files('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/')
 weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv')
 
 # activate conda env
