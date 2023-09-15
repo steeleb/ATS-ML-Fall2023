@@ -1,0 +1,83 @@
+---
+title: "Estimation of Daily Water Temperature using Random Forest"
+author: "B Steele"
+date: today
+date-format: long
+format: pdf
+editor: 
+  visual:
+    theme: sky
+---
+
+```{r env-set-up, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(reticulate)
+
+# read in temp data
+NW_temp <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/manual_temperature_data_NW_harmonized_v2023-08-30.csv')
+surf_temp <- NW_temp %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1)
+  
+NW_estimates <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/NW_lake_LandsatC2_ST_v2023-05-31.csv') %>% 
+  select(date, GNIS_Name, Permanent_Identifier, med_SurfaceTemp) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = med_SurfaceTemp - 273.15,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake'))
+
+all_NW_temp <- full_join(surf_temp, NW_estimates)
+
+# weather data
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv')
+
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+```
+
+## Checkpoint Issues:
+
+-   is this a legit way to do train/val/test?!
+
+## Scientific motivation and problem statement:
+
+Water temperature is often a reliable indicator of general water quality (cite). Active monitoring of lakes, especially those that are difficult to access by monitoring personnel, is difficult. Additionally, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors (cite).
+
+By leveraging the historical manual monitoring data from Northern Water, as well as surface temperature estimates from Landsat thermal bands alongside weather data, can we adequately estimate surface water temperature using static variables (like elevation, lake area, shoreline complexity) and weather data?
+
+In this example, I use only measured surface temperature from 7 lakes/reservoirs in the Northern Water system. 'Surface temperature' for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature.
+
+It's clear that there are site-level differences in temperature range and general seasonal response. These differences likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm will quickly learn those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes.
+
+## Training/Validation/Testing
+
+Due to the likely influence of static variables in the algorithm my validation and testing sets will both have 'new' lakes to validate and test on.
+
+## Write up contents:
+
+-   scientific motivation and specific problem statement
+
+-   description of the data including explicit identification of the predictors and predictands
+
+-   description of any data pre-processing performed and why you did it
+
+-   training/validation/testing split
+
+-   machine learning setup and reasons for hyperparameter choices when relevant
+
+-   results (e.g. testing accuracy)
+
+-   a detailed discussion of why you don't think you have overfit
+
+-   a detailed discussion of why you think the results are better (or worse if that is the case) than a baseline approach of your choice (e.g. random chance, linear regression, climatology, etc)
+
+-   concluding thoughts including any insights gained from your efforts
+
+-   link to your github repository
+
+```{python}
+#| echo: false
+2 * 2
+```
