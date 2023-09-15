@@ -1,8 +1,9 @@
 # ATS-ML-Fall2023
+
 Repository of code for ATS780A7 assignments
 
 To run code in this repository, it requires a virtual environment (here named
-'env_ATSML'. To create a virtual environment for this codebase, run the 
+'env_ATSML'). To create a virtual environment for this codebase, run the 
 following commands at the terminal. The following venv setup is courtesy of 
 Dr. Elizabeth Barnes, Colorado State University.
 

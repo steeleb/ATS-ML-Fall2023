@@ -1,0 +1,77 @@
+---
+title: "Scratch work area"
+subtitle: "Daily Water Temperature using Random Forest"
+author: "B Steele"
+date: today
+format: html
+editor: visual
+---
+
+```{r env-set-up, echo=FALSE}
+library(tidyverse)
+library(reticulate)
+
+# read in temp data
+NW_temp <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/manual_temperature_data_NW_harmonized_v2023-08-30.csv')
+surf_temp <- NW_temp %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1)
+
+# and the ST data   
+NW_estimates <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/NW_lake_LandsatC2_ST_v2023-05-31.csv') %>% 
+  select(date, GNIS_Name, Permanent_Identifier, med_SurfaceTemp) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = med_SurfaceTemp - 273.15,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature))
+
+all_NW_temp <- full_join(surf_temp, NW_estimates)
+
+# weather data
+list.files('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/')
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv')
+```
+
+Quick look at all the manual temperature data
+
+```{r}
+ggplot(NW_temp, aes(x = date, y = value, color = depth)) + 
+  geom_point() + 
+  facet_grid(feature ~ .) +
+  theme_bw()
+```
+
+And then when we limit to top most measurement per site and day
+
+```{r}
+ggplot(surf_temp, aes(x = depth)) + 
+  geom_histogram(binwidth = (0.1)) +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(surf_temp, aes(x = date, y = value, color = depth)) + 
+  geom_point() + 
+  facet_grid(feature ~ .) +
+  theme_bw()
+```
+
+And now the RS surface temperature
+
+```{r}
+ggplot(NW_estimates, aes(x = date, y = med_SurfaceTemp)) +
+  geom_point() +
+  facet_grid(GNIS_Name ~ .) +
+  theme_bw()
+```
+
+And all together
+
+```{r}
+ggplot(all_NW_temp, aes(x = date, y = value)) +
+  geom_point() +
+  facet_grid(feature ~ .) +
+  theme_bw()
+```
