@@ -138,13 +138,17 @@ rs = 37
 ## Checkpoint Issues:
 
 -   is this a defensible way to do train/val/test? Should I leave an additional lake out for validation?
--   for the train/val that is timeseries aware, why can't I seem to use it?
+-   What's the best way (computationally, and code-wise) to perform these time series
+trainings?
 -   how do I establish a baseline for this? better than yesterday-is-today? (when I don't have a daily timeseries, can I do this?)
--   
+-   is this the best way to use static variables? i.e. is there some other fancy way of doing it?
+
+[GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
+
 
 ## Scientific motivation and problem statement:
 
-Water temperature is often a reliable indicator of general water quality (cite). Active monitoring of lakes, especially those that are difficult to access by monitoring personnel, is difficult. Additionally, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors (cite).
+Water temperature is often an indicator of water quality (cite). Active monitoring of lakes, especially those that are difficult to access by monitoring personnel, is difficult. Additionally, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors (cite).
 
 In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
 
@@ -160,6 +164,9 @@ Reservoir has incomplete data and has been dropped from this analysis.')
 ```
 
 Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are outside of this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes.
+
+No pre-processing was completed for these data, as decision trees make purely 
+empirical decisions, and pre-processing is not usually necessary. 
 
 ## Training/Validation/Testing
 
@@ -178,11 +185,14 @@ test = np.array(test)
 ```
 
 ```{python}
+#| echo: false
+#| output: false
+
 # Tunable Parameters for Model
-number_of_trees = 40
-tree_depth = None 
-node_split = 10       # minimum number of training samples needed to split a node
-leaf_samples = 10     # minimum number of training samples required to make a leaf node
+number_of_trees = 50
+tree_depth = None
+node_split = 10    # minimum number of training samples needed to split a node
+leaf_samples = 10    # minimum number of training samples required to make a leaf node
 criterion = 'absolute_error'   
 
 
@@ -205,35 +215,101 @@ rf = RandomForestRegressor(n_estimators = number_of_trees,
 
 rf.fit(features1, labels_1)
 
+rf2 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf2.fit(features2, labels_2)
+
+rf3 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf3.fit(features3, labels_3)
+
 ```
 
 ```{python}
+#| echo: false
+#| output: false
+
 # Use the forest's predict method on the test data
-predictions = rf.predict(features2)
+predictions2 = rf.predict(features2)
 
 # Use testing set to validate the performance
 # Print out the mean absolute error (MAE)
-mae_errors = abs(predictions - labels_2)
+mae_errors = abs(predictions2 - labels_2)
 #print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
 print('Error (MAE): ', round(np.mean(mae_errors), 2))
+mae_err_text = round(np.mean(mae_errors), 2)
 
 # See its performance (mean squared errors)
-mse_errors = np.sqrt(np.mean((predictions - labels_2)**2))
+mse_errors = np.sqrt(np.mean((predictions2 - labels_2)**2))
 #print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
 print('Error (MSE): ', round(mse_errors, 2))
+mse_err_text = round(mse_errors, 2)
 ```
 
+```{python}
+#| echo: false
+#| output: false
 
-## Write up contents:
+# Use the forest's predict method on the test data
+predictions3 = rf2.predict(features3)
 
--   description of any data pre-processing performed and why you did it
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors2 = abs(predictions3 - labels_3)
+#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
+print('Error (MAE): ', round(np.mean(mae_errors2), 2))
+mae_err_text2 = round(np.mean(mae_errors2), 2)
 
--   machine learning setup and reasons for hyperparameter choices when relevant
+# See its performance (mean squared errors)
+mse_errors2 = np.sqrt(np.mean((predictions3 - labels_3)**2))
+#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
+print('Error (MSE): ', round(mse_errors2, 2))
+mse_err_text2 = round(mse_errors2, 2)
+```
 
--   results (e.g. testing accuracy)
+```{python}
+#| echo: false
+#| output: false
 
--   a detailed discussion of why you don't think you have overfit
+# Use the forest's predict method on the test data
+predictions4 = rf3.predict(features4)
 
--   a detailed discussion of why you think the results are better (or worse if that is the case) than a baseline approach of your choice (e.g. random chance, linear regression, climatology, etc)
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors3 = abs(predictions4 - labels_4)
+#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
+print('Error (MAE): ', round(np.mean(mae_errors3), 2))
+mae_err_text3 = round(np.mean(mae_errors3), 2)
 
--   concluding thoughts including any insights gained from your efforts
+# See its performance (mean squared errors)
+mse_errors3 = np.sqrt(np.mean((predictions4 - labels_4)**2))
+#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
+print('Error (MSE): ', round(mse_errors3, 2))
+mse_err_text3 = round(mse_errors3, 2)
+```
+
+## Results
+
+Algorithms trained on early data performed better than those trained on larger portions
+of the dataset. The first train-val window resulted in a MAE of `r py$mae_err_text` and MSE of `r py$mse_err_text`, where the last window (including all earlier data) resulted in a MAE of `r py$mae_err_text3` and MSE of `r py$mse_err_text3`.
+
+
+<!-- ## Write up contents: -->
+
+<!-- -   machine learning setup and reasons for hyperparameter choices when relevant -->
+
+<!-- -   a detailed discussion of why you don't think you have overfit -->
+
+<!-- -   a detailed discussion of why you think the results are better (or worse if that is the case) than a baseline approach of your choice (e.g. random chance, linear regression, climatology, etc) -->
+
+<!-- -   concluding thoughts including any insights gained from your efforts -->
