@@ -138,9 +138,12 @@ rs = 37
 ## Checkpoint Issues:
 
 -   is this a defensible way to do train/val/test? Should I leave an additional lake out for validation?
+ -- we're going to do leave-one-out train-val and then the test will be on the hindcasted data
 -   What's the best way (computationally, and code-wise) to perform these time series
 trainings?
+ -- ya gotta hack it. either (a) use an enesemble of the models, or re-train on all the data and use the resulting model
 -   how do I establish a baseline for this? better than yesterday-is-today? (when I don't have a daily timeseries, can I do this?)
+ -- maybe try a global daily average of the last 10y or something? Hopefully this will create a near-daily TS and can go from there.
 -   is this the best way to use static variables? i.e. is there some other fancy way of doing it?
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
@@ -165,10 +168,16 @@ Reservoir has incomplete data and has been dropped from this analysis.')
 
 Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are outside of this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes.
 
-No pre-processing was completed for these data, as decision trees make purely 
-empirical decisions, and pre-processing is not usually necessary. 
+No pre-processing was completed for these data for regularization, as decision trees make purely 
+empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the
+previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
 
 ## Training/Validation/Testing
+
+- leave one out by lake -- look at Willard et al for their cv method
+-- if the cv's are all performing reasonably, combine all data, model and use to forecast
+-- if the cv's perform differently, consider an ensemble method
+- for 'test' use the hindcasting!
 
 It's clear that there are site-level differences in temperature range and general seasonal response (fig?). These differences are likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm will quickly learn those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes.
 
@@ -303,6 +312,28 @@ mse_err_text3 = round(mse_errors3, 2)
 Algorithms trained on early data performed better than those trained on larger portions
 of the dataset. The first train-val window resulted in a MAE of `r py$mae_err_text` and MSE of `r py$mse_err_text`, where the last window (including all earlier data) resulted in a MAE of `r py$mae_err_text3` and MSE of `r py$mse_err_text3`.
 
+```{r, echo = F}
+#| label: val-dt-graph
+#| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
+pred = py$predictions2
+train_val2$pred = pred
+
+ggplot(train_val2, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
+```
+
+```{r, echo = F}
+#| label: pred-obs
+#| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset.'
+ggplot(train_val2, aes(x = value, y = pred ,color = feature)) +
+  geom_point() +
+  theme_bw() +
+  scale_color_viridis_d()
+```
 
 <!-- ## Write up contents: -->
 
