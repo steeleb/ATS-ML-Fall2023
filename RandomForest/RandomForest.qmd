@@ -52,18 +52,93 @@ weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregate
 static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
 
 # join together for full dataset
-full_dataset = left_join(all_NW_temp, weather) %>% 
-  left_join(., static) %>% 
-  select(-c(Permanent_Identifier, med_SurfaceTemp, depth))
+full_dataset = left_join(static, all_NW_temp) %>% 
+  left_join(., weather) %>% 
+  select(-c(Permanent_Identifier, med_SurfaceTemp, depth, time, parameter, station)) %>% 
+  arrange(date) %>% 
+  filter(complete.cases(.))
+
+# drop windy gap for incomplete
+full_dataset <- full_dataset %>% 
+  filter(feature != 'Windy Gap Reservoir')
+
+# remove carter lake for test set
+test = full_dataset %>% 
+  filter(feature == 'Carter Lake')
+
+# remove carter from full
+train_validate = anti_join(full_dataset, test) 
+
+train_val1 <- train_validate %>% 
+  filter(date < '2008-01-01')
+train_val2 <- train_validate %>% 
+  filter(date >= '2008-01-01', 
+         date < '2013-01-01')
+train_val3 <- train_validate %>% 
+  filter(date >= '2013-01-01', 
+         date < '2018-01-01')
+train_val4 <- train_validate %>% 
+  filter(date >= '2018-01-01', 
+         date < '2023-01-01')
 
 # activate conda env
 use_condaenv('~/miniconda3/envs/env_ATSML/')
 
 ```
 
+```{python, import-modules}
+#| echo: false
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+import pandas as pd
+import datetime
+import sklearn
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import export_graphviz
+from sklearn.inspection import permutation_importance
+import pydot
+import matplotlib.pyplot as plt
+```
+
+```{python, label-feature-setup}
+#| echo: false
+
+# grab the values we want to predict
+labels_1 = np.array(r.train_val1['value'])
+labels_2 = np.array(r.train_val2['value'])
+labels_3 = np.array(r.train_val3['value'])
+labels_4 = np.array(r.train_val4['value'])
+
+# and remove the labels from the dataset containing the feature set
+features1 = (r.train_val1
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2 = (r.train_val2
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3 = (r.train_val3
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4 = (r.train_val4
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# Saving feature names for later use
+feature_list = list(features1.columns)
+
+# Convert to numpy array
+features1 = np.array(features1)
+features2 = np.array(features2)
+features3 = np.array(features3)
+features4 = np.array(features4)
+
+# set random state
+rs = 37
+```
+
 ## Checkpoint Issues:
 
 -   is this a defensible way to do train/val/test? Should I leave an additional lake out for validation?
+-   for the train/val that is timeseries aware, why can't I seem to use it?
 -   how do I establish a baseline for this? better than yesterday-is-today? (when I don't have a daily timeseries, can I do this?)
 -   
 
@@ -82,9 +157,6 @@ static %>%
   kbl(format = 'markdown', 
       caption = 'Static variables used in the Random Forest algorithm. Windy Gap
 Reservoir has incomplete data and has been dropped from this analysis.')
-
-all_NW_temp <- all_NW_temp %>% 
-  filter(feature != 'Windy Gap Reservoir')
 ```
 
 Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are outside of this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes.
@@ -95,24 +167,62 @@ It's clear that there are site-level differences in temperature range and genera
 
 Due to this, my test set will be comprised of data from a lake that was never used in the train/validate set (Carter Lake).
 
-For validation, I'll be using timeseries-aware cross validation, leaving 5-year periods of data out to validate on. The workflow I use for cross validation is an adaptation of [this script](https://github.com/eabarnes1010/course_ml_ats/blob/main/code/rf_regress_christman.ipynb).
+For validation, I'll be using timeseries-aware k-fold training and validation sets, splitting the data in 5-year chunks since 2008, resulting in 4 train-test iterations.
 
-```{python, import-modules}
+```{python, kfold}
 #| echo: false
-import sys
-import numpy as np
-import matplotlib.pyplot as plt
+#| output: false
 
-import pandas as pd
-import datetime
-import sklearn
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.tree import export_graphviz
-from sklearn.inspection import permutation_importance
-import pydot
-import matplotlib.pyplot as plt
+test = r.test
+test = np.array(test)
 ```
+
+```{python}
+# Tunable Parameters for Model
+number_of_trees = 40
+tree_depth = None 
+node_split = 10       # minimum number of training samples needed to split a node
+leaf_samples = 10     # minimum number of training samples required to make a leaf node
+criterion = 'absolute_error'   
+
+
+# Instantiate model with number of decision trees prescribed above
+# PARAMETERS:
+#     n_estimators: number of trees/ensembles
+#     random_state: random seed
+#     max_depth: maximum depth of each tree
+#     criterion: evaluation statistic to split a mode, 'mse'  or 'mae'
+#     min_samples_split: minimum number of samples needed to split a node
+#     min_samples_leaf: minimum number of samples needed to make a leaf
+#     for more, see: https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html#sklearn.ensemble.RandomForestRegressor
+rf = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+
+
+rf.fit(features1, labels_1)
+
+```
+
+```{python}
+# Use the forest's predict method on the test data
+predictions = rf.predict(features2)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors = abs(predictions - labels_2)
+#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
+print('Error (MAE): ', round(np.mean(mae_errors), 2))
+
+# See its performance (mean squared errors)
+mse_errors = np.sqrt(np.mean((predictions - labels_2)**2))
+#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
+print('Error (MSE): ', round(mse_errors, 2))
+```
+
 
 ## Write up contents:
 

@@ -18,3 +18,4 @@ Dr. Elizabeth Barnes, Colorado State University.
 - pip install tqdm pydot graphviz
 - pip install -U scikit-image
 - pip install shap
+- conda install pandas
