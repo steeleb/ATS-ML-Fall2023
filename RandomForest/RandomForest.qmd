@@ -71,13 +71,8 @@ full_dataset <- full_dataset %>%
   filter(feature != 'Windy Gap Reservoir') %>% 
   mutate(day_of_year = yday(date))
 
-baseline_by_lake <- full_dataset %>% 
-  group_by(feature, day_of_year) %>% 
-  summarize(mean_temp_by_lake_deg_C = mean(value)) %>% 
-  left_join(full_dataset, .)
-
 baseline_by_date <- full_dataset %>% 
-  group_by(date) %>% 
+  group_by(day_of_year) %>% 
   summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
   left_join(full_dataset, .)
 
@@ -211,8 +206,13 @@ baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
  
 
--   how do I establish a baseline for this? better than yesterday-is-today? (when I don't have a daily timeseries, can I do this?)
- -- maybe try a global daily average of the last 10y or something? Hopefully this will create a near-daily TS and can go from there.
+```{python, test-set}
+#| echo: false
+#| output: false
+
+test = r.test
+test = np.array(test)
+```
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
 
@@ -222,6 +222,8 @@ baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 Water temperature is often an indicator of water quality (cite). Active monitoring of lakes, especially those that are difficult to access by monitoring personnel, is difficult. Additionally, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors (cite).
 
 In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
+
+The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.  
 
 In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`. These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
 
@@ -234,43 +236,37 @@ static %>%
 Reservoir has incomplete data and has been dropped from this analysis.')
 ```
 
-Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are outside of this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes.
+Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes. 
 
-No pre-processing was completed for these data for regularization, as decision trees make purely 
+No pre-processing (i.e. regularization) was completed for these data, as decision trees make purely 
 empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the
 previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
 
 ## Training/Validation/Testing
 
-- leave one out by lake -- look at Willard et al for their cv method
--- if the cv's are all performing reasonably, combine all data, model and use to forecast
--- if the cv's perform differently, consider an ensemble method
-- for 'test' use the hindcasting!
+It's clear that there are site-level differences in temperature range and general seasonal response (fig?). These differences are likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm may have a propensity to "learn" those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes. 
 
- -- we're going to do leave-one-out train-val and then the test will be on the hindcasted data
+For training and validation I use a leave-one-out method that will result in six random forest models where each iteration will use data from a single lake for validation and the other five for training. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2018 across all lakes. 
 
-It's clear that there are site-level differences in temperature range and general seasonal response (fig?). These differences are likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm will quickly learn those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes.
+## Results
 
-For testing, I'll be using timeseries-aware k-fold training and validation sets, splitting the data in 5-year chunks since 2008, resulting in 4 train-test iterations.
+### Hyper-parameter tuning
 
-```{python, kfold}
+I manually iterated on numerous hyper-parameter settings during training of the model, tyring varying number of estimators (30-70), maximum tree depth (3-7), node split minimum (5-20), and leaf split minimum (5-10). Attempts at hyper-parameter tuning did not result in significant changes in validation performance. 
+
+
+```{python, train}
 #| echo: false
 #| output: false
 
-test = r.test
-test = np.array(test)
-```
-
-```{python}
-#| echo: false
-#| output: false
+#baseline 1.3, 1.8
 
 # Tunable Parameters for Model
 number_of_trees = 40
 tree_depth = 7
-node_split = 5   # minimum number of training samples needed to split a node
+node_split = 10   # minimum number of training samples needed to split a node
 leaf_samples = 5   # minimum number of training samples required to make a leaf node
-#criterion = 'absolute_error' 
+criterion = 'absolute_error' 
 
 
 # Instantiate model with number of decision trees prescribed above
@@ -418,63 +414,151 @@ mse_errors_6 = np.sqrt(np.mean((predictions_6 - val_labels_6)**2))
 mse_err_text_6 = round(mse_errors_6, 2)
 ```
 
-## Results
+```{python, tree-viz}
+#| echo: false
 
-Algorithms trained on early data performed better than those trained on larger portions
-of the dataset. The first train-val window resulted in a MAE of `r py$mae_err_text` and MSE of `r py$mse_err_text`, where the last window (including all earlier data) resulted in a MAE of `r py$mae_err_text3` and MSE of `r py$mse_err_text3`.
+local_path = '/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures'
 
-```{r, echo = F}
+tree = rf.estimators_[29]
+filename = 'RF_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf2.estimators_[29]
+filename = 'RF2_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf3.estimators_[29]
+filename = 'RF3_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf4.estimators_[29]
+filename = 'RF4_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf5.estimators_[29]
+filename = 'RF5_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf6.estimators_[29]
+filename = 'RF6_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+
+```
+
+```{zsh}
+#| echo: false
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF2_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree2.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF3_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree3.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF4_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree4.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF5_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree5.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF6_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree6.png
+
+```
+
+```{python}
+#| echo: false
+def calc_importances(rf, feature_list):
+    # Get numerical feature importances
+    importances = list(rf.feature_importances_)
+    # List of tuples with variable and importance
+    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
+    # Sort the feature importances by most important first
+    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
+    # Print out the feature and importances 
+    [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
+    return importances
+
+
+def plot_feat_importances(importances, feature_list, rf_num): 
+    plt.figure()
+    # Set the style
+    plt.style.use('seaborn-v0_8-colorblind')
+    # list of x locations for plotting
+    x_values = list(range(len(importances)))
+    # Make a bar chart
+    plt.barh(x_values, importances)
+    # Tick labels for x axis
+    plt.yticks(x_values, feature_list)
+    # Axis labels and title
+    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
+    plt.show()
+
+plot_feat_importances(calc_importances(rf, feature_list), feature_list, 1)
+plot_feat_importances(calc_importances(rf2, feature_list), feature_list, 2)
+plot_feat_importances(calc_importances(rf3, feature_list), feature_list, 3)
+plot_feat_importances(calc_importances(rf4, feature_list), feature_list, 4)
+plot_feat_importances(calc_importances(rf5, feature_list), feature_list, 5)
+plot_feat_importances(calc_importances(rf6, feature_list), feature_list, 6)
+
+```
+
+
+```{r, timeseries, echo = F}
 #| label: val-dt-graph
 #| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
 pred = py$predictions_1
-train_val1$pred = pred
+val1$pred = pred
 
-ggplot(train_val1, aes(x = date, y = value)) +
+ggplot(val1, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
 
 pred = py$predictions_2
-train_val2$pred = pred
+val2$pred = pred
 
-ggplot(train_val2, aes(x = date, y = value)) +
+ggplot(val2, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
 
 pred = py$predictions_3
-train_val3$pred = pred
+val3$pred = pred
 
-ggplot(train_val3, aes(x = date, y = value)) +
+ggplot(val3, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
 
 pred = py$predictions_4
-train_val4$pred = pred
+val4$pred = pred
 
-ggplot(train_val4, aes(x = date, y = value)) +
+ggplot(val4, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
 
 pred = py$predictions_5
-train_val5$pred = pred
+val5$pred = pred
 
-ggplot(train_val5, aes(x = date, y = value)) +
+ggplot(val5, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
 
 pred = py$predictions_6
-train_val6$pred = pred
+val6$pred = pred
 
-ggplot(train_val6, aes(x = date, y = value)) +
+ggplot(val6, aes(x = date, y = value)) +
   facet_grid(feature ~ .) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
@@ -483,10 +567,10 @@ ggplot(train_val6, aes(x = date, y = value)) +
 
 ```
 
-```{r, echo = F}
+```{r, pred-obs, echo = F}
 #| label: pred-obs
 #| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset.'
-ggplot(train_val2, aes(x = value, y = pred ,color = feature)) +
+ggplot(val2, aes(x = value, y = pred ,color = feature)) +
   geom_point() +
   theme_bw() +
   scale_color_viridis_d()
