@@ -14,8 +14,12 @@ library(tidyverse)
 library(reticulate)
 library(kableExtra)
 
+# file paths
+is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+
 # read in temp data
-NW_temp <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/manual_temperature_data_NW_harmonized_v2023-08-30.csv')
+NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
 surf_temp <- NW_temp %>% 
   group_by(date, feature) %>% 
   arrange(depth) %>% 
@@ -23,14 +27,15 @@ surf_temp <- NW_temp %>%
   filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
                         'SM-DAM', 'WC-DAM', 'WG-DAM'))
   
-NW_estimates <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/NW_lake_LandsatC2_ST_v2023-05-31.csv') %>% 
-  select(date, GNIS_Name, Permanent_Identifier, med_SurfaceTemp) %>% 
+NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
   rename(feature = GNIS_Name) %>% 
-  mutate(value = med_SurfaceTemp - 273.15,
+  mutate(value = adj_medTemp,
          feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
                              feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
                              TRUE ~ feature),
-         station = 'sat')
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
 
 all_NW_temp <- full_join(surf_temp, NW_estimates)
 
@@ -54,32 +59,53 @@ static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static
 # join together for full dataset
 full_dataset = left_join(static, all_NW_temp) %>% 
   left_join(., weather) %>% 
-  select(-c(Permanent_Identifier, med_SurfaceTemp, depth, time, parameter, station)) %>% 
+  filter(between(month, 4, 10)) %>% 
+  select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
+            station, Latitude, Longitude, lakeID, HarmonizedName, 
+            location_type, mission)) %>% 
   arrange(date) %>% 
-  filter(complete.cases(.))
+  filter(complete.cases(.)) 
 
 # drop windy gap for incomplete
 full_dataset <- full_dataset %>% 
-  filter(feature != 'Windy Gap Reservoir')
+  filter(feature != 'Windy Gap Reservoir') %>% 
+  mutate(day_of_year = yday(date))
 
-# remove carter lake for test set
-test = full_dataset %>% 
-  filter(feature == 'Carter Lake')
+baseline_by_lake <- full_dataset %>% 
+  group_by(feature, day_of_year) %>% 
+  summarize(mean_temp_by_lake_deg_C = mean(value)) %>% 
+  left_join(full_dataset, .)
 
-# remove carter from full
-train_validate = anti_join(full_dataset, test) 
+baseline_by_date <- full_dataset %>% 
+  group_by(date) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
+  left_join(full_dataset, .)
 
-train_val1 <- train_validate %>% 
-  filter(date < '2008-01-01')
-train_val2 <- train_validate %>% 
-  filter(date >= '2008-01-01', 
-         date < '2013-01-01')
-train_val3 <- train_validate %>% 
-  filter(date >= '2013-01-01', 
-         date < '2018-01-01')
-train_val4 <- train_validate %>% 
-  filter(date >= '2018-01-01', 
-         date < '2023-01-01')
+test <- full_dataset %>% 
+  filter(date >= ymd('2020-01-01'))
+
+training <- anti_join(full_dataset, test) %>% 
+  select(-day_of_year)
+
+# using a leave-one-out method for train/validate
+train1 <- training %>% 
+  filter(feature != 'Grand Lake')
+val1 = anti_join(training, train1)
+train2 <- training %>% 
+  filter(feature != 'Horsetooth Reservoir')
+val2 = anti_join(training, train2)
+train3 <- training %>% 
+  filter(feature != 'Shadow Mountain Reservoir')
+val3 = anti_join(training, train3)
+train4 <- training %>% 
+  filter(feature != 'Granby Reservoir')
+val4 = anti_join(training, train4)
+train5 <- training %>% 
+  filter(feature != 'Carter Lake')
+val5 = anti_join(training, train5)
+train6 <- training %>% 
+  filter(feature != 'Willow Creek Reservoir')
+val6 = anti_join(training, train6)
 
 # activate conda env
 use_condaenv('~/miniconda3/envs/env_ATSML/')
@@ -107,19 +133,47 @@ import matplotlib.pyplot as plt
 #| echo: false
 
 # grab the values we want to predict
-labels_1 = np.array(r.train_val1['value'])
-labels_2 = np.array(r.train_val2['value'])
-labels_3 = np.array(r.train_val3['value'])
-labels_4 = np.array(r.train_val4['value'])
+labels_1 = np.array(r.train1['value'])
+labels_2 = np.array(r.train2['value'])
+labels_3 = np.array(r.train3['value'])
+labels_4 = np.array(r.train4['value'])
+labels_5 = np.array(r.train5['value'])
+labels_6 = np.array(r.train6['value'])
+
+# grab the values we want to predict
+val_labels_1 = np.array(r.val1['value'])
+val_labels_2 = np.array(r.val2['value'])
+val_labels_3 = np.array(r.val3['value'])
+val_labels_4 = np.array(r.val4['value'])
+val_labels_5 = np.array(r.val5['value'])
+val_labels_6 = np.array(r.val6['value'])
 
 # and remove the labels from the dataset containing the feature set
-features1 = (r.train_val1
+features1 = (r.train1
   .drop(['value', 'feature', 'date'], axis = 1))
-features2 = (r.train_val2
+features2 = (r.train2
   .drop(['value', 'feature', 'date'], axis = 1))
-features3 = (r.train_val3
+features3 = (r.train3
   .drop(['value', 'feature', 'date'], axis = 1))
-features4 = (r.train_val4
+features4 = (r.train4
+  .drop(['value', 'feature', 'date'], axis = 1))
+features5 = (r.train5
+  .drop(['value', 'feature', 'date'], axis = 1))
+features6 = (r.train6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# and remove the labels from the dataset containing the feature set
+val_features1 = (r.val1
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2 = (r.val2
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3 = (r.val3
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4 = (r.val4
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features5 = (r.val5
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features6 = (r.val6
   .drop(['value', 'feature', 'date'], axis = 1))
 
 # Saving feature names for later use
@@ -130,21 +184,35 @@ features1 = np.array(features1)
 features2 = np.array(features2)
 features3 = np.array(features3)
 features4 = np.array(features4)
+features5 = np.array(features5)
+features6 = np.array(features6)
+
+# Convert to numpy array
+val_features1 = np.array(val_features1)
+val_features2 = np.array(val_features2)
+val_features3 = np.array(val_features3)
+val_features4 = np.array(val_features4)
+val_features5 = np.array(val_features5)
+val_features6 = np.array(val_features6)
 
 # set random state
 rs = 37
 ```
 
-## Checkpoint Issues:
+```{python, baseline}
+#| echo: false
 
--   is this a defensible way to do train/val/test? Should I leave an additional lake out for validation?
- -- we're going to do leave-one-out train-val and then the test will be on the hindcasted data
--   What's the best way (computationally, and code-wise) to perform these time series
-trainings?
- -- ya gotta hack it. either (a) use an enesemble of the models, or re-train on all the data and use the resulting model
+baseline_day = r.baseline_by_date
+mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
+baseline_mae_err_text = round(mae_baseline_day_errors, 2)
+
+mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
+baseline_mse_err_text = round(mse_baseline_day_errors, 2)
+```
+ 
+
 -   how do I establish a baseline for this? better than yesterday-is-today? (when I don't have a daily timeseries, can I do this?)
  -- maybe try a global daily average of the last 10y or something? Hopefully this will create a near-daily TS and can go from there.
--   is this the best way to use static variables? i.e. is there some other fancy way of doing it?
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
 
@@ -155,7 +223,7 @@ Water temperature is often an indicator of water quality (cite). Active monitori
 
 In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
 
-In addition to the manual sampling record that is maintained by Northern water, I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9. These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
+In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`. These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
 
 \[\[add units to table\]\]
 
@@ -179,11 +247,11 @@ previous day weather, 3 days prior, and 5 days prior - meaning, the model does n
 -- if the cv's perform differently, consider an ensemble method
 - for 'test' use the hindcasting!
 
+ -- we're going to do leave-one-out train-val and then the test will be on the hindcasted data
+
 It's clear that there are site-level differences in temperature range and general seasonal response (fig?). These differences are likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm will quickly learn those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes.
 
-Due to this, my test set will be comprised of data from a lake that was never used in the train/validate set (Carter Lake).
-
-For validation, I'll be using timeseries-aware k-fold training and validation sets, splitting the data in 5-year chunks since 2008, resulting in 4 train-test iterations.
+For testing, I'll be using timeseries-aware k-fold training and validation sets, splitting the data in 5-year chunks since 2008, resulting in 4 train-test iterations.
 
 ```{python, kfold}
 #| echo: false
@@ -198,11 +266,11 @@ test = np.array(test)
 #| output: false
 
 # Tunable Parameters for Model
-number_of_trees = 50
-tree_depth = None
-node_split = 10    # minimum number of training samples needed to split a node
-leaf_samples = 10    # minimum number of training samples required to make a leaf node
-criterion = 'absolute_error'   
+number_of_trees = 40
+tree_depth = 7
+node_split = 5   # minimum number of training samples needed to split a node
+leaf_samples = 5   # minimum number of training samples required to make a leaf node
+#criterion = 'absolute_error' 
 
 
 # Instantiate model with number of decision trees prescribed above
@@ -220,7 +288,6 @@ rf = RandomForestRegressor(n_estimators = number_of_trees,
                            min_samples_leaf = leaf_samples,
                            criterion = criterion,
                            max_depth = tree_depth)
-
 
 rf.fit(features1, labels_1)
 
@@ -242,69 +309,113 @@ rf3 = RandomForestRegressor(n_estimators = number_of_trees,
                            
 rf3.fit(features3, labels_3)
 
+rf4 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf4.fit(features4, labels_4)
+
+rf5 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf5.fit(features5, labels_5)
+
+rf6 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf6.fit(features6, labels_6)
+
 ```
 
-```{python}
+```{python, performance}
 #| echo: false
 #| output: false
 
 # Use the forest's predict method on the test data
-predictions2 = rf.predict(features2)
+predictions_1 = rf.predict(val_features1)
 
 # Use testing set to validate the performance
 # Print out the mean absolute error (MAE)
-mae_errors = abs(predictions2 - labels_2)
-#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
-print('Error (MAE): ', round(np.mean(mae_errors), 2))
+mae_errors = abs(predictions_1 - val_labels_1)
 mae_err_text = round(np.mean(mae_errors), 2)
 
 # See its performance (mean squared errors)
-mse_errors = np.sqrt(np.mean((predictions2 - labels_2)**2))
-#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
-print('Error (MSE): ', round(mse_errors, 2))
+mse_errors = np.sqrt(np.mean((predictions_1 - val_labels_1)**2))
 mse_err_text = round(mse_errors, 2)
-```
 
-```{python}
-#| echo: false
-#| output: false
 
 # Use the forest's predict method on the test data
-predictions3 = rf2.predict(features3)
+predictions_2 = rf2.predict(val_features2)
 
 # Use testing set to validate the performance
 # Print out the mean absolute error (MAE)
-mae_errors2 = abs(predictions3 - labels_3)
-#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
-print('Error (MAE): ', round(np.mean(mae_errors2), 2))
-mae_err_text2 = round(np.mean(mae_errors2), 2)
+mae_errors_2 = abs(predictions_2 - val_labels_2)
+mae_err_text_2 = round(np.mean(mae_errors_2), 2)
 
 # See its performance (mean squared errors)
-mse_errors2 = np.sqrt(np.mean((predictions3 - labels_3)**2))
-#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
-print('Error (MSE): ', round(mse_errors2, 2))
-mse_err_text2 = round(mse_errors2, 2)
-```
+mse_errors_2 = np.sqrt(np.mean((predictions_2 - val_labels_2)**2))
+mse_err_text_2 = round(mse_errors_2, 2)
 
-```{python}
-#| echo: false
-#| output: false
 
 # Use the forest's predict method on the test data
-predictions4 = rf3.predict(features4)
+predictions_3 = rf3.predict(val_features3)
 
 # Use testing set to validate the performance
 # Print out the mean absolute error (MAE)
-mae_errors3 = abs(predictions4 - labels_4)
-#print('Baseline error (MAE): ', round(np.mean(mae_baseline_errors), 2))
-print('Error (MAE): ', round(np.mean(mae_errors3), 2))
-mae_err_text3 = round(np.mean(mae_errors3), 2)
+mae_errors_3 = abs(predictions_3 - val_labels_3)
+mae_err_text_3 = round(np.mean(mae_errors_3), 2)
 
 # See its performance (mean squared errors)
-mse_errors3 = np.sqrt(np.mean((predictions4 - labels_4)**2))
-#print('Baseline error (MSE): ', round( mse_baseline_errors, 2))
-print('Error (MSE): ', round(mse_errors3, 2))
-mse_err_text3 = round(mse_errors3, 2)
+mse_errors_3 = np.sqrt(np.mean((predictions_3 - val_labels_3)**2))
+mse_err_text_3 = round(mse_errors_3, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_4 = rf4.predict(val_features4)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_4 = abs(predictions_4 - val_labels_4)
+mae_err_text_4 = round(np.mean(mae_errors_4), 2)
+
+# See its performance (mean squared errors)
+mse_errors_4 = np.sqrt(np.mean((predictions_4 - val_labels_4)**2))
+mse_err_text_4 = round(mse_errors_4, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_5 = rf5.predict(val_features5)
+
+# Print out the mean absolute error (MAE)
+mae_errors_5 = abs(predictions_5 - val_labels_5)
+mae_err_text_5 = round(np.mean(mae_errors_5), 2)
+
+# See its performance (mean squared errors)
+mse_errors_5 = np.sqrt(np.mean((predictions_5 - val_labels_5)**2))
+mse_err_text_5 = round(mse_errors_5, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_6 = rf6.predict(val_features6)
+
+# Print out the mean absolute error (MAE)
+mae_errors_6 = abs(predictions_6 - val_labels_6)
+mae_err_text_6 = round(np.mean(mae_errors_6), 2)
+
+# See its performance (mean squared errors)
+mse_errors_6 = np.sqrt(np.mean((predictions_6 - val_labels_6)**2))
+mse_err_text_6 = round(mse_errors_6, 2)
 ```
 
 ## Results
@@ -315,7 +426,16 @@ of the dataset. The first train-val window resulted in a MAE of `r py$mae_err_te
 ```{r, echo = F}
 #| label: val-dt-graph
 #| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
-pred = py$predictions2
+pred = py$predictions_1
+train_val1$pred = pred
+
+ggplot(train_val1, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
+pred = py$predictions_2
 train_val2$pred = pred
 
 ggplot(train_val2, aes(x = date, y = value)) +
@@ -323,6 +443,43 @@ ggplot(train_val2, aes(x = date, y = value)) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
   theme_bw()
+
+pred = py$predictions_3
+train_val3$pred = pred
+
+ggplot(train_val3, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
+pred = py$predictions_4
+train_val4$pred = pred
+
+ggplot(train_val4, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
+pred = py$predictions_5
+train_val5$pred = pred
+
+ggplot(train_val5, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
+pred = py$predictions_6
+train_val6$pred = pred
+
+ggplot(train_val6, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+
 
 ```
 
