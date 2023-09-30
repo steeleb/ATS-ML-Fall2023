@@ -82,6 +82,9 @@ test <- full_dataset %>%
 training <- anti_join(full_dataset, test) %>% 
   select(-day_of_year)
 
+test <- test %>% 
+  select(-day_of_year)
+
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
   filter(feature != 'Grand Lake')
@@ -194,6 +197,53 @@ val_features6 = np.array(val_features6)
 rs = 37
 ```
 
+```{python, importance-funcs}
+#| echo: false
+#| 
+def calc_importances(rf, feature_list):
+    # Get numerical feature importances
+    importances = list(rf.feature_importances_)
+    # List of tuples with variable and importance
+    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
+    # Sort the feature importances by most important first
+    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
+    # Print out the feature and importances 
+    # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
+    return importances
+
+
+def plot_feat_importances(importances, feature_list, rf_num): 
+    plt.figure()
+    # Set the style
+    plt.style.use('seaborn-v0_8-colorblind')
+    # list of x locations for plotting
+    x_values = list(range(len(importances)))
+    # Make a bar chart
+    plt.barh(x_values, importances)
+    # Tick labels for x axis
+    plt.yticks(x_values, feature_list)
+    # Axis labels and title
+    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
+    plt.show()
+
+
+def plot_perm_importances(permute, sorted_idx, feature_list, rf_num):
+  # Sort the feature list based on 
+
+    new_feature_list = []
+    for index in sorted_idx:  
+        new_feature_list.append(feature_list[index])
+
+    fig, ax = plt.subplots()
+    ax.boxplot(permute.importances[sorted_idx].T,
+           vert=False, labels=new_feature_list)
+    ax.set_title("Permutation Importances {}".format(rf_num))
+    fig.tight_layout()
+    fig.savefig('/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/permutation_imp_{}.png'.format(rf_num))
+
+
+```
+
 ```{python, baseline}
 #| echo: false
 
@@ -204,30 +254,18 @@ baseline_mae_err_text = round(mae_baseline_day_errors, 2)
 mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
 baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
- 
-
-```{python, test-set}
-#| echo: false
-#| output: false
-
-test = r.test
-test = np.array(test)
-```
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
 
-
 ## Scientific motivation and problem statement:
 
-Water temperature is often an indicator of water quality (cite). Active monitoring of lakes, especially those that are difficult to access by monitoring personnel, is difficult. Additionally, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors (cite).
+Water temperature is often an indicator of water quality, as it governs much of the biological activity in freshwater. While temperature is an important parameter to monitor in freshwater lakes, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors.
 
 In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
 
-The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.  
+The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.
 
-In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`. These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
-
-\[\[add units to table\]\]
+In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`). These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
 
 ```{r static-vars-table, echo = F}
 static %>% 
@@ -236,36 +274,29 @@ static %>%
 Reservoir has incomplete data and has been dropped from this analysis.')
 ```
 
-Ideally, implementation of this algorithm will include application to lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that it is not overfit to these specific lakes. 
+Eventual implementation of this algorithm will include forecasting of temperature for these lakes as well as lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that the algorithm is not overfit to these specific lakes.
 
-No pre-processing (i.e. regularization) was completed for these data, as decision trees make purely 
-empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the
-previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
+No pre-processing (i.e. regularization) was completed for these data, as decision trees make purely empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
 
 ## Training/Validation/Testing
 
-It's clear that there are site-level differences in temperature range and general seasonal response (fig?). These differences are likely due to static variables that differentiate these lakes. That said, if I add in site-level information, the algorithm may have a propensity to "learn" those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes. 
+During data exploration, it was clear that there are site-level differences in temperature range and general seasonal response for each water body. These differences are likely due to static variables that differentiate these water bodies. That said, if I add in site-level information, the algorithm may have a propensity to "learn" those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes. I will need to look at the RF trees, feature importances, and permutation importances to make sure these features do drive the results of the model (which might indicate that the model is overfit to the identifying characteristics).
 
-For training and validation I use a leave-one-out method that will result in six random forest models where each iteration will use data from a single lake for validation and the other five for training. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2018 across all lakes. 
+For training and validation I use a leave-one-out method that will result in six random forest models where each iteration will use data from a single lake for validation and the other five for training. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2020 across all lakes.
 
 ## Results
-
-### Hyper-parameter tuning
-
-I manually iterated on numerous hyper-parameter settings during training of the model, tyring varying number of estimators (30-70), maximum tree depth (3-7), node split minimum (5-20), and leaf split minimum (5-10). Attempts at hyper-parameter tuning did not result in significant changes in validation performance. 
-
 
 ```{python, train}
 #| echo: false
 #| output: false
 
-#baseline 1.3, 1.8
+#40, 7, 5, 5
 
 # Tunable Parameters for Model
 number_of_trees = 40
-tree_depth = 7
-node_split = 10   # minimum number of training samples needed to split a node
-leaf_samples = 5   # minimum number of training samples required to make a leaf node
+tree_depth = 5 # 
+node_split = 15  # minimum number of training samples needed to split a node
+leaf_samples = 10   # minimum number of training samples required to make a leaf node
 criterion = 'absolute_error' 
 
 
@@ -414,6 +445,17 @@ mse_errors_6 = np.sqrt(np.mean((predictions_6 - val_labels_6)**2))
 mse_err_text_6 = round(mse_errors_6, 2)
 ```
 
+```{r, echo = F}
+mae_error = c(py$mae_err_text, py$mae_err_text_2, py$mae_err_text_3, 
+              py$mae_err_text_4, py$mae_err_text_5, py$mae_err_text_6)
+mse_error = c(py$mse_err_text, py$mse_err_text_2, py$mse_err_text_3, 
+              py$mse_err_text_4, py$mse_err_text_5, py$mse_err_text_6)
+```
+
+### Hyper-parameter tuning
+
+I manually iterated on hyper-parameter settings during training of the model, tyring various number of estimators (30-70), maximum tree depth (3-7), node split minimum (5-20), and leaf split minimum (5-10;). Most attempts at hyper-parameter tuning did not result in significant changes in validation performance. I generally chose more conservative hyperparameters in as a way to assure that I do not overfit the training data (estmiators = `r py$number_of_trees`, maximum tree depth = `r py$tree_depth`, node split minimum = `r py$node_split`, leaf split = `r py$leaf_samples`) resulting in MAE of the validation ranging between `r min(mae_error)` and `r max(mae_error)` and MSE ranging between `r min(mse_error)` and `r max(mse_error)`.
+
 ```{python, tree-viz}
 #| echo: false
 
@@ -449,10 +491,9 @@ filename = 'RF6_temp_tree'
 # Export the image to a dot file
 export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
 
-
 ```
 
-```{zsh}
+```{zsh, tree-save}
 #| echo: false
 
 dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree.png
@@ -466,36 +507,115 @@ dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF4_temp_tree.
 dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF5_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree5.png
 
 dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF6_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree6.png
+```
+
+### Hindcasting application
+
+Because all random forest models in training and validation performed similarly across the ensemble and the feature importance and permutation importance (see Supporting Figures) were similar, I've decided to aggregate all data together and create a single RF algorithm to use for hindcasting. In an effort to make sure that this RF is built similarly to the previous leave-one-out models, I'll examine the RF tree, feature importance, and permutation importance.
+
+```{python, train-hindcast}
+#| echo: false
+#| output: false
+
+labels_train = np.array(r.training['value'])
+labels_test = np.array(r.test['value'])
+
+features_train = (r.training
+  .drop(['value', 'feature', 'date'], axis = 1))
+features_test = (r.test
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+rf_hind = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+
+rf_hind.fit(features_train, labels_train)
+
+# Use the forest's predict method on the test data
+predictions = rf_hind.predict(features_train)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_hind = abs(predictions - labels_train)
+mae_err_text_hind = round(np.mean(mae_errors_hind), 2)
+
+# See its performance (mean squared errors)
+mse_errors_hind = np.sqrt(np.mean((predictions - labels_train)**2))
+mse_err_text_hind = round(mse_errors_hind, 2)
+
+plot_feat_importances(calc_importances(rf_hind, feature_list), feature_list, 'collective')
+
+# Single-pass permutation
+permute = permutation_importance(rf_hind, features_train, labels_train, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 'collective')
 
 ```
 
+```{python, test-perf}
+#| echo: false
+
+# Use the forest's predict method on the test data
+test_predictions = rf_hind.predict(features_test)
+
+# Print out the mean absolute error (MAE)
+mae_errors_test = abs(test_predictions - labels_test)
+mae_err_text_test = round(np.mean(mae_errors_test), 2)
+
+# See its performance (mean squared errors)
+mse_errors_test = np.sqrt(np.mean((test_predictions - labels_test)**2))
+mse_err_text_test = round(mse_errors_test, 2)
+
+```
+![Permutation importance for variables in the hold out testing dataset.](figures/permutation_imp_collective.png)
+
+This iteration of the model shares similar feature importances to the leave-one-out models, indicating that this model architecture is similar to the previous and does not seem to fit according to the static variables. Whether or not this algorithm is overfit to the training data is unclear. The hindcast test dataset had a higer MAE (`r py$mae_err_text_test`) and MSE (`r py$mse_err_text_test`) than the leave-one-out validation datasets. Additionally, the collective training MAE (`r py$mae_err_text_hind`) and MSE (`r py$mse_err_text_hind`) was considerably lower than the test MAE and MSE. This indicates to me that the collective training decision may have resulted in overfitting of the data. 
+
+### Discussion
+
+If the collective model is not overfit, it is possible that error is propagated from the the remote sensing data, climatological patterns, or inadequate training features. The remote sensing data has about a 1 deg C error associated with it. 2020 forward was a particularly dry time in the climatological past - most of Colorado experience severe drought and many reservoirs were at historically low levels until this past year. Finally, it is possible that the included meteorological summary features are not adequate for robust training of the algorith - inclusion of heating degree days and cooling degree days could be a useful way to embed seasonal change as well as heat/cooling persistence. This could possibly help with the early season misalignment see in Figure 2. 
+
+
+```{r, timeseries, echo = F}
+#| label: val-dt-graph
+#| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
+pred = py$test_predictions
+test$pred = pred
+
+ggplot(test, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+```
+
+```{r, pred-obs, echo = F}
+#| label: pred-obs
+#| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset for the testing set. Black dashed line is 1:1.'
+ggplot(test, aes(x = value, y = pred ,color = feature)) +
+  geom_point() +
+  labs(x = expression(paste(italic('in situ'), , ' water temperature (deg C)')),
+       y = 'predicted water temeprature (deg C)', color = 'lake')+
+  coord_cartesian(xlim = c(0, 25),
+                  ylim = c(0, 25)) +
+  theme_bw() +
+  geom_abline(slope = 1, intercept = 0, lty = 2) +
+  scale_color_viridis_d()
+```
+
+
+## Supporting Figures
+
 ```{python}
 #| echo: false
-def calc_importances(rf, feature_list):
-    # Get numerical feature importances
-    importances = list(rf.feature_importances_)
-    # List of tuples with variable and importance
-    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
-    # Sort the feature importances by most important first
-    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
-    # Print out the feature and importances 
-    [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
-    return importances
-
-
-def plot_feat_importances(importances, feature_list, rf_num): 
-    plt.figure()
-    # Set the style
-    plt.style.use('seaborn-v0_8-colorblind')
-    # list of x locations for plotting
-    x_values = list(range(len(importances)))
-    # Make a bar chart
-    plt.barh(x_values, importances)
-    # Tick labels for x axis
-    plt.yticks(x_values, feature_list)
-    # Axis labels and title
-    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
-    plt.show()
+#| label: feature-imporance
+#| fig-cap: 'Feature imporances across all leave-one-out validation datasets with consistent feature imporatnces across 5-day previous summaries and minimal importance of the waterbody.'
 
 plot_feat_importances(calc_importances(rf, feature_list), feature_list, 1)
 plot_feat_importances(calc_importances(rf2, feature_list), feature_list, 2)
@@ -506,82 +626,54 @@ plot_feat_importances(calc_importances(rf6, feature_list), feature_list, 6)
 
 ```
 
+```{python, perm-imp}
+#| echo: false
+# Single-pass permutation
+permute = permutation_importance(rf, val_features1, val_labels_1, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-```{r, timeseries, echo = F}
-#| label: val-dt-graph
-#| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
-pred = py$predictions_1
-val1$pred = pred
+plot_perm_importances(permute, sorted_idx, feature_list, 1)
 
-ggplot(val1, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
+# Single-pass permutation
+permute = permutation_importance(rf2, val_features2, val_labels_2, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-pred = py$predictions_2
-val2$pred = pred
+plot_perm_importances(permute, sorted_idx, feature_list, 2)
 
-ggplot(val2, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
+# Single-pass permutation
+permute = permutation_importance(rf3, val_features3, val_labels_3, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-pred = py$predictions_3
-val3$pred = pred
+plot_perm_importances(permute, sorted_idx, feature_list, 3)
 
-ggplot(val3, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
+# Single-pass permutation
+permute = permutation_importance(rf4, val_features4, val_labels_4, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-pred = py$predictions_4
-val4$pred = pred
+plot_perm_importances(permute, sorted_idx, feature_list, 4)
 
-ggplot(val4, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
+# Single-pass permutation
+permute = permutation_importance(rf5, val_features5, val_labels_5, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-pred = py$predictions_5
-val5$pred = pred
+plot_perm_importances(permute, sorted_idx, feature_list, 5)
 
-ggplot(val5, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
+# Single-pass permutation
+permute = permutation_importance(rf6, val_features6, val_labels_6, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
 
-pred = py$predictions_6
-val6$pred = pred
-
-ggplot(val6, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  theme_bw()
-
+plot_perm_importances(permute, sorted_idx, feature_list, 6)
 
 ```
-
-```{r, pred-obs, echo = F}
-#| label: pred-obs
-#| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset.'
-ggplot(val2, aes(x = value, y = pred ,color = feature)) +
-  geom_point() +
-  theme_bw() +
-  scale_color_viridis_d()
-```
-
-<!-- ## Write up contents: -->
-
-<!-- -   machine learning setup and reasons for hyperparameter choices when relevant -->
-
-<!-- -   a detailed discussion of why you don't think you have overfit -->
-
-<!-- -   a detailed discussion of why you think the results are better (or worse if that is the case) than a baseline approach of your choice (e.g. random chance, linear regression, climatology, etc) -->
-
-<!-- -   concluding thoughts including any insights gained from your efforts -->
