@@ -1,0 +1,677 @@
+---
+title: "Estimation of Daily Water Temperature using Neural Networks"
+author: "B Steele"
+date: today
+date-format: long
+format: pdf
+editor: 
+  visual:
+    theme: sky
+---
+
+```{r env-set-up, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+
+# file paths
+is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+
+# read in temp data
+NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
+surf_temp <- NW_temp %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1) %>% 
+  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
+                        'SM-DAM', 'WC-DAM', 'WG-DAM'))
+  
+NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = adj_medTemp,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature),
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
+
+all_NW_temp <- full_join(surf_temp, NW_estimates)
+
+# weather data
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv') %>% 
+  rename(feature = lake) %>% 
+  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
+                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
+                        'mean_wind_mps', 'max_wind_mps'),
+               names_to = 'variable') %>% 
+  pivot_wider(names_from = c('variable', 'n_prev_days'),
+              names_sep = '_',
+              values_from = 'value') %>% 
+  mutate(feature = if_else(feature == 'Lake Granby',
+                           'Granby Reservoir',
+                           feature))
+
+# static
+static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
+
+# join together for full dataset
+full_dataset = left_join(static, all_NW_temp) %>% 
+  left_join(., weather) %>% 
+  filter(between(month, 4, 10)) %>% 
+  select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
+            station, Latitude, Longitude, lakeID, HarmonizedName, 
+            location_type, mission)) %>% 
+  arrange(date) %>% 
+  filter(complete.cases(.)) 
+
+# drop windy gap for incomplete
+full_dataset <- full_dataset %>% 
+  filter(feature != 'Windy Gap Reservoir') %>% 
+  mutate(day_of_year = yday(date))
+
+baseline_by_date <- full_dataset %>% 
+  group_by(day_of_year) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
+  left_join(full_dataset, .)
+
+test <- full_dataset %>% 
+  filter(date >= ymd('2020-01-01'))
+
+training <- anti_join(full_dataset, test)
+
+test <- test
+
+# using a leave-one-out method for train/validate
+train1 <- training %>% 
+  filter(feature != 'Grand Lake')
+val1 = anti_join(training, train1)
+train2 <- training %>% 
+  filter(feature != 'Horsetooth Reservoir')
+val2 = anti_join(training, train2)
+train3 <- training %>% 
+  filter(feature != 'Shadow Mountain Reservoir')
+val3 = anti_join(training, train3)
+train4 <- training %>% 
+  filter(feature != 'Granby Reservoir')
+val4 = anti_join(training, train4)
+train5 <- training %>% 
+  filter(feature != 'Carter Lake')
+val5 = anti_join(training, train5)
+train6 <- training %>% 
+  filter(feature != 'Willow Creek Reservoir')
+val6 = anti_join(training, train6)
+
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+```
+
+```{python, import-modules}
+#| echo: false
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+import pandas as pd
+import datetime
+import sklearn
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import export_graphviz
+from sklearn.inspection import permutation_importance
+import pydot
+import matplotlib.pyplot as plt
+```
+
+```{python, label-feature-setup}
+#| echo: false
+
+# grab the values we want to predict
+labels_1 = np.array(r.train1['value'])
+labels_2 = np.array(r.train2['value'])
+labels_3 = np.array(r.train3['value'])
+labels_4 = np.array(r.train4['value'])
+labels_5 = np.array(r.train5['value'])
+labels_6 = np.array(r.train6['value'])
+
+# grab the values we want to predict
+val_labels_1 = np.array(r.val1['value'])
+val_labels_2 = np.array(r.val2['value'])
+val_labels_3 = np.array(r.val3['value'])
+val_labels_4 = np.array(r.val4['value'])
+val_labels_5 = np.array(r.val5['value'])
+val_labels_6 = np.array(r.val6['value'])
+
+# and remove the labels from the dataset containing the feature set
+features1 = (r.train1
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2 = (r.train2
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3 = (r.train3
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4 = (r.train4
+  .drop(['value', 'feature', 'date'], axis = 1))
+features5 = (r.train5
+  .drop(['value', 'feature', 'date'], axis = 1))
+features6 = (r.train6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# and remove the labels from the dataset containing the feature set
+val_features1 = (r.val1
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2 = (r.val2
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3 = (r.val3
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4 = (r.val4
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features5 = (r.val5
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features6 = (r.val6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# Saving feature names for later use
+feature_list = list(features1.columns)
+
+# Convert to numpy array
+features1 = np.array(features1)
+features2 = np.array(features2)
+features3 = np.array(features3)
+features4 = np.array(features4)
+features5 = np.array(features5)
+features6 = np.array(features6)
+
+# Convert to numpy array
+val_features1 = np.array(val_features1)
+val_features2 = np.array(val_features2)
+val_features3 = np.array(val_features3)
+val_features4 = np.array(val_features4)
+val_features5 = np.array(val_features5)
+val_features6 = np.array(val_features6)
+
+# set random state
+rs = 37
+```
+
+```{python, importance-funcs}
+#| echo: false
+#| 
+def calc_importances(rf, feature_list):
+    # Get numerical feature importances
+    importances = list(rf.feature_importances_)
+    # List of tuples with variable and importance
+    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
+    # Sort the feature importances by most important first
+    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
+    # Print out the feature and importances 
+    # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
+    return importances
+
+
+def plot_feat_importances(importances, feature_list, rf_num): 
+    plt.figure()
+    # Set the style
+    plt.style.use('seaborn-v0_8-colorblind')
+    # list of x locations for plotting
+    x_values = list(range(len(importances)))
+    # Make a bar chart
+    plt.barh(x_values, importances)
+    # Tick labels for x axis
+    plt.yticks(x_values, feature_list)
+    # Axis labels and title
+    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
+    plt.show()
+
+
+def plot_perm_importances(permute, sorted_idx, feature_list, rf_num):
+  # Sort the feature list based on 
+
+    new_feature_list = []
+    for index in sorted_idx:  
+        new_feature_list.append(feature_list[index])
+
+    fig, ax = plt.subplots()
+    ax.boxplot(permute.importances[sorted_idx].T,
+           vert=False, labels=new_feature_list)
+    ax.set_title("Permutation Importances {}".format(rf_num))
+    fig.tight_layout()
+    fig.savefig('/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/permutation_imp_{}.png'.format(rf_num))
+
+
+```
+
+```{python, baseline}
+#| echo: false
+
+baseline_day = r.baseline_by_date
+mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
+baseline_mae_err_text = round(mae_baseline_day_errors, 2)
+
+mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
+baseline_mse_err_text = round(mse_baseline_day_errors, 2)
+```
+
+[GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
+
+## Scientific motivation and problem statement:
+
+Water temperature is often an indicator of water quality, as it governs much of the biological activity in freshwater. While temperature is an important parameter to monitor in freshwater lakes, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors.
+
+In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
+
+The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.
+
+In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`). These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
+
+```{r static-vars-table, echo = F}
+static %>% 
+  kbl(format = 'markdown', 
+      caption = 'Static variables used in the Random Forest algorithm. Windy Gap
+Reservoir has incomplete data and has been dropped from this analysis.')
+```
+
+Eventual implementation of this algorithm will include forecasting of temperature for these lakes as well as lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that the algorithm is not overfit to these specific lakes.
+
+No pre-processing (i.e. regularization) was completed for these data, as decision trees make purely empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
+
+## Training/Validation/Testing
+
+During data exploration, it was clear that there are site-level differences in temperature range and general seasonal response for each water body. These differences are likely due to static variables that differentiate these water bodies. That said, if I add in site-level information, the algorithm may have a propensity to "learn" those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes. I will need to look at the RF trees, feature importances, and permutation importances to make sure these features do drive the results of the model (which might indicate that the model is overfit to the identifying characteristics).
+
+For training and validation I use a leave-one-out method that will result in six random forest models where each iteration will use data from a single lake for validation and the other five for training. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2020 across all lakes.
+
+## Results
+
+```{python, train}
+#| echo: false
+#| output: false
+
+#40, 7, 5, 5
+
+# Tunable Parameters for Model
+number_of_trees = 40
+tree_depth = 5 # 
+node_split = 15  # minimum number of training samples needed to split a node
+leaf_samples = 10   # minimum number of training samples required to make a leaf node
+criterion = 'absolute_error' 
+
+
+# Instantiate model with number of decision trees prescribed above
+# PARAMETERS:
+#     n_estimators: number of trees/ensembles
+#     random_state: random seed
+#     max_depth: maximum depth of each tree
+#     criterion: evaluation statistic to split a mode, 'mse'  or 'mae'
+#     min_samples_split: minimum number of samples needed to split a node
+#     min_samples_leaf: minimum number of samples needed to make a leaf
+#     for more, see: https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html#sklearn.ensemble.RandomForestRegressor
+rf = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+
+rf.fit(features1, labels_1)
+
+rf2 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf2.fit(features2, labels_2)
+
+rf3 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf3.fit(features3, labels_3)
+
+rf4 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf4.fit(features4, labels_4)
+
+rf5 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf5.fit(features5, labels_5)
+
+rf6 = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+                           
+rf6.fit(features6, labels_6)
+
+```
+
+```{python, performance}
+#| echo: false
+#| output: false
+
+# Use the forest's predict method on the test data
+predictions_1 = rf.predict(val_features1)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors = abs(predictions_1 - val_labels_1)
+mae_err_text = round(np.mean(mae_errors), 2)
+
+# See its performance (mean squared errors)
+mse_errors = np.sqrt(np.mean((predictions_1 - val_labels_1)**2))
+mse_err_text = round(mse_errors, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_2 = rf2.predict(val_features2)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_2 = abs(predictions_2 - val_labels_2)
+mae_err_text_2 = round(np.mean(mae_errors_2), 2)
+
+# See its performance (mean squared errors)
+mse_errors_2 = np.sqrt(np.mean((predictions_2 - val_labels_2)**2))
+mse_err_text_2 = round(mse_errors_2, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_3 = rf3.predict(val_features3)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_3 = abs(predictions_3 - val_labels_3)
+mae_err_text_3 = round(np.mean(mae_errors_3), 2)
+
+# See its performance (mean squared errors)
+mse_errors_3 = np.sqrt(np.mean((predictions_3 - val_labels_3)**2))
+mse_err_text_3 = round(mse_errors_3, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_4 = rf4.predict(val_features4)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_4 = abs(predictions_4 - val_labels_4)
+mae_err_text_4 = round(np.mean(mae_errors_4), 2)
+
+# See its performance (mean squared errors)
+mse_errors_4 = np.sqrt(np.mean((predictions_4 - val_labels_4)**2))
+mse_err_text_4 = round(mse_errors_4, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_5 = rf5.predict(val_features5)
+
+# Print out the mean absolute error (MAE)
+mae_errors_5 = abs(predictions_5 - val_labels_5)
+mae_err_text_5 = round(np.mean(mae_errors_5), 2)
+
+# See its performance (mean squared errors)
+mse_errors_5 = np.sqrt(np.mean((predictions_5 - val_labels_5)**2))
+mse_err_text_5 = round(mse_errors_5, 2)
+
+
+# Use the forest's predict method on the test data
+predictions_6 = rf6.predict(val_features6)
+
+# Print out the mean absolute error (MAE)
+mae_errors_6 = abs(predictions_6 - val_labels_6)
+mae_err_text_6 = round(np.mean(mae_errors_6), 2)
+
+# See its performance (mean squared errors)
+mse_errors_6 = np.sqrt(np.mean((predictions_6 - val_labels_6)**2))
+mse_err_text_6 = round(mse_errors_6, 2)
+```
+
+```{r, echo = F}
+mae_error = c(py$mae_err_text, py$mae_err_text_2, py$mae_err_text_3, 
+              py$mae_err_text_4, py$mae_err_text_5, py$mae_err_text_6)
+mse_error = c(py$mse_err_text, py$mse_err_text_2, py$mse_err_text_3, 
+              py$mse_err_text_4, py$mse_err_text_5, py$mse_err_text_6)
+```
+
+### Hyper-parameter tuning
+
+I manually iterated on hyper-parameter settings during training of the model, tyring various number of estimators (30-70), maximum tree depth (3-7), node split minimum (5-20), and leaf split minimum (5-10;). Most attempts at hyper-parameter tuning did not result in significant changes in validation performance. I generally chose more conservative hyperparameters in as a way to assure that I do not overfit the training data (estmiators = `r py$number_of_trees`, maximum tree depth = `r py$tree_depth`, node split minimum = `r py$node_split`, leaf split = `r py$leaf_samples`) resulting in MAE of the validation ranging between `r min(mae_error)` and `r max(mae_error)` and MSE ranging between `r min(mse_error)` and `r max(mse_error)`.
+
+```{python, tree-viz}
+#| echo: false
+
+local_path = '/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures'
+
+tree = rf.estimators_[29]
+filename = 'RF_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf2.estimators_[29]
+filename = 'RF2_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf3.estimators_[29]
+filename = 'RF3_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf4.estimators_[29]
+filename = 'RF4_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf5.estimators_[29]
+filename = 'RF5_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+tree = rf6.estimators_[29]
+filename = 'RF6_temp_tree'
+# Export the image to a dot file
+export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+
+```
+
+```{zsh, tree-save}
+#| echo: false
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF2_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree2.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF3_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree3.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF4_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree4.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF5_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree5.png
+
+dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF6_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree6.png
+```
+
+### Hindcasting application
+
+Because all random forest models in training and validation performed similarly across the ensemble and the feature importance and permutation importance (see Supporting Figures) were similar, I've decided to aggregate all data together and create a single RF algorithm to use for hindcasting. In an effort to make sure that this RF is built similarly to the previous leave-one-out models, I'll examine the RF tree, feature importance, and permutation importance.
+
+```{python, train-hindcast}
+#| echo: false
+#| output: false
+
+labels_train = np.array(r.training['value'])
+labels_test = np.array(r.test['value'])
+
+features_train = (r.training
+  .drop(['value', 'feature', 'date'], axis = 1))
+features_test = (r.test
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+rf_hind = RandomForestRegressor(n_estimators = number_of_trees, 
+                           random_state = rs,
+                           min_samples_split = node_split,
+                           min_samples_leaf = leaf_samples,
+                           criterion = criterion,
+                           max_depth = tree_depth)
+
+rf_hind.fit(features_train, labels_train)
+
+# Use the forest's predict method on the test data
+predictions = rf_hind.predict(features_train)
+
+# Use testing set to validate the performance
+# Print out the mean absolute error (MAE)
+mae_errors_hind = abs(predictions - labels_train)
+mae_err_text_hind = round(np.mean(mae_errors_hind), 2)
+
+# See its performance (mean squared errors)
+mse_errors_hind = np.sqrt(np.mean((predictions - labels_train)**2))
+mse_err_text_hind = round(mse_errors_hind, 2)
+
+plot_feat_importances(calc_importances(rf_hind, feature_list), feature_list, 'collective')
+
+# Single-pass permutation
+permute = permutation_importance(rf_hind, features_train, labels_train, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 'collective')
+
+```
+
+```{python, test-perf}
+#| echo: false
+
+# Use the forest's predict method on the test data
+test_predictions = rf_hind.predict(features_test)
+
+# Print out the mean absolute error (MAE)
+mae_errors_test = abs(test_predictions - labels_test)
+mae_err_text_test = round(np.mean(mae_errors_test), 2)
+
+# See its performance (mean squared errors)
+mse_errors_test = np.sqrt(np.mean((test_predictions - labels_test)**2))
+mse_err_text_test = round(mse_errors_test, 2)
+
+```
+![Permutation importance for variables in the hold out testing dataset.](figures/permutation_imp_collective.png)
+
+This iteration of the model shares similar feature importances to the leave-one-out models, indicating that this model architecture is similar to the previous and does not seem to fit according to the static variables. Whether or not this algorithm is overfit to the training data is unclear. The hindcast test dataset had a higer MAE (`r py$mae_err_text_test`) and MSE (`r py$mse_err_text_test`) than the leave-one-out validation datasets. Additionally, the collective training MAE (`r py$mae_err_text_hind`) and MSE (`r py$mse_err_text_hind`) was considerably lower than the test MAE and MSE. This indicates to me that the collective training decision may have resulted in overfitting of the data. 
+
+### Discussion
+
+If the collective model is not overfit, it is possible that error is propagated from the the remote sensing data, climatological patterns, or inadequate training features. The remote sensing data has about a 1 deg C error associated with it. 2020 forward was a particularly dry time in the climatological past - most of Colorado experience severe drought and many reservoirs were at historically low levels until this past year. Finally, it is possible that the included meteorological summary features are not adequate for robust training of the algorith - inclusion of heating degree days and cooling degree days could be a useful way to embed seasonal change as well as heat/cooling persistence. This could possibly help with the early season misalignment see in Figure 2. 
+
+
+```{r, timeseries, echo = F}
+#| label: val-dt-graph
+#| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
+pred = py$test_predictions
+test$pred = pred
+
+ggplot(test, aes(x = date, y = value)) +
+  facet_grid(feature ~ .) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  theme_bw()
+```
+
+```{r, pred-obs, echo = F}
+#| label: pred-obs
+#| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset for the testing set. Black dashed line is 1:1.'
+ggplot(test, aes(x = value, y = pred ,color = feature)) +
+  geom_point() +
+  labs(x = expression(paste(italic('in situ'), , ' water temperature (deg C)')),
+       y = 'predicted water temeprature (deg C)', color = 'lake')+
+  coord_cartesian(xlim = c(0, 25),
+                  ylim = c(0, 25)) +
+  theme_bw() +
+  geom_abline(slope = 1, intercept = 0, lty = 2) +
+  scale_color_viridis_d()
+```
+
+
+## Supporting Figures
+
+```{python}
+#| echo: false
+#| label: feature-imporance
+#| fig-cap: 'Feature imporances across all leave-one-out validation datasets with consistent feature imporatnces across 5-day previous summaries and minimal importance of the waterbody.'
+
+plot_feat_importances(calc_importances(rf, feature_list), feature_list, 1)
+plot_feat_importances(calc_importances(rf2, feature_list), feature_list, 2)
+plot_feat_importances(calc_importances(rf3, feature_list), feature_list, 3)
+plot_feat_importances(calc_importances(rf4, feature_list), feature_list, 4)
+plot_feat_importances(calc_importances(rf5, feature_list), feature_list, 5)
+plot_feat_importances(calc_importances(rf6, feature_list), feature_list, 6)
+
+```
+
+```{python, perm-imp}
+#| echo: false
+# Single-pass permutation
+permute = permutation_importance(rf, val_features1, val_labels_1, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 1)
+
+# Single-pass permutation
+permute = permutation_importance(rf2, val_features2, val_labels_2, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 2)
+
+# Single-pass permutation
+permute = permutation_importance(rf3, val_features3, val_labels_3, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 3)
+
+# Single-pass permutation
+permute = permutation_importance(rf4, val_features4, val_labels_4, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 4)
+
+# Single-pass permutation
+permute = permutation_importance(rf5, val_features5, val_labels_5, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 5)
+
+# Single-pass permutation
+permute = permutation_importance(rf6, val_features6, val_labels_6, n_repeats=10, 
+                                 random_state=rs)
+# Sort the importances
+sorted_idx = permute.importances_mean.argsort()
+
+plot_perm_importances(permute, sorted_idx, feature_list, 6)
+
+```

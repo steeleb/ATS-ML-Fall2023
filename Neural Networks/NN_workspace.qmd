@@ -1,0 +1,251 @@
+---
+title: "Neural Networks Workspace"
+format: html
+editor: visual
+jupyter: python3
+---
+
+
+```{r env-set-up, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+
+# file paths
+is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+
+# read in temp data
+NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
+surf_temp <- NW_temp %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1) %>% 
+  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
+                        'SM-DAM', 'WC-DAM', 'WG-DAM'))
+  
+NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = adj_medTemp,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature),
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
+
+all_NW_temp <- full_join(surf_temp, NW_estimates)
+
+# weather data
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv') %>% 
+  rename(feature = lake) %>% 
+  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
+                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
+                        'mean_wind_mps', 'max_wind_mps'),
+               names_to = 'variable') %>% 
+  pivot_wider(names_from = c('variable', 'n_prev_days'),
+              names_sep = '_',
+              values_from = 'value') %>% 
+  mutate(feature = if_else(feature == 'Lake Granby',
+                           'Granby Reservoir',
+                           feature))
+
+# static
+static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
+
+# join together for full dataset
+full_dataset = left_join(static, all_NW_temp) %>% 
+  left_join(., weather) %>% 
+  filter(between(month, 4, 10)) %>% 
+  select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
+            station, Latitude, Longitude, lakeID, HarmonizedName, 
+            location_type, mission)) %>% 
+  arrange(date) %>% 
+  filter(complete.cases(.)) 
+
+# drop windy gap for incomplete
+full_dataset <- full_dataset %>% 
+  filter(feature != 'Windy Gap Reservoir') %>% 
+  mutate(day_of_year = yday(date))
+
+baseline_by_date <- full_dataset %>% 
+  group_by(day_of_year) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
+  left_join(full_dataset, .)
+
+test <- full_dataset %>% 
+  filter(date >= ymd('2020-01-01'))
+
+training <- anti_join(full_dataset, test)
+
+test <- test
+
+# using a leave-one-out method for train/validate
+train1 <- training %>% 
+  filter(feature != 'Grand Lake')
+val1 = anti_join(training, train1)
+train2 <- training %>% 
+  filter(feature != 'Horsetooth Reservoir')
+val2 = anti_join(training, train2)
+train3 <- training %>% 
+  filter(feature != 'Shadow Mountain Reservoir')
+val3 = anti_join(training, train3)
+train4 <- training %>% 
+  filter(feature != 'Granby Reservoir')
+val4 = anti_join(training, train4)
+train5 <- training %>% 
+  filter(feature != 'Carter Lake')
+val5 = anti_join(training, train5)
+train6 <- training %>% 
+  filter(feature != 'Willow Creek Reservoir')
+val6 = anti_join(training, train6)
+
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+```
+
+```{python, import-modules}
+#| echo: false
+import sys
+import numpy as np
+import matplotlib.pyplot as plt
+
+import pandas as pd
+import datetime
+import sklearn
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import export_graphviz
+from sklearn.inspection import permutation_importance
+import pydot
+import matplotlib.pyplot as plt
+```
+
+```{python, label-feature-setup}
+#| echo: false
+
+# grab the values we want to predict
+labels_1 = np.array(r.train1['value'])
+labels_2 = np.array(r.train2['value'])
+labels_3 = np.array(r.train3['value'])
+labels_4 = np.array(r.train4['value'])
+labels_5 = np.array(r.train5['value'])
+labels_6 = np.array(r.train6['value'])
+
+# grab the values we want to predict
+val_labels_1 = np.array(r.val1['value'])
+val_labels_2 = np.array(r.val2['value'])
+val_labels_3 = np.array(r.val3['value'])
+val_labels_4 = np.array(r.val4['value'])
+val_labels_5 = np.array(r.val5['value'])
+val_labels_6 = np.array(r.val6['value'])
+
+# and remove the labels from the dataset containing the feature set
+features1 = (r.train1
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2 = (r.train2
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3 = (r.train3
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4 = (r.train4
+  .drop(['value', 'feature', 'date'], axis = 1))
+features5 = (r.train5
+  .drop(['value', 'feature', 'date'], axis = 1))
+features6 = (r.train6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# and remove the labels from the dataset containing the feature set
+val_features1 = (r.val1
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2 = (r.val2
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3 = (r.val3
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4 = (r.val4
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features5 = (r.val5
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features6 = (r.val6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# Saving feature names for later use
+feature_list = list(features1.columns)
+
+# Convert to numpy array
+features1 = np.array(features1)
+features2 = np.array(features2)
+features3 = np.array(features3)
+features4 = np.array(features4)
+features5 = np.array(features5)
+features6 = np.array(features6)
+
+# Convert to numpy array
+val_features1 = np.array(val_features1)
+val_features2 = np.array(val_features2)
+val_features3 = np.array(val_features3)
+val_features4 = np.array(val_features4)
+val_features5 = np.array(val_features5)
+val_features6 = np.array(val_features6)
+
+# set random state
+rs = 37
+```
+
+```{python, importance-funcs}
+#| echo: false
+#| 
+def calc_importances(rf, feature_list):
+    # Get numerical feature importances
+    importances = list(rf.feature_importances_)
+    # List of tuples with variable and importance
+    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
+    # Sort the feature importances by most important first
+    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
+    # Print out the feature and importances 
+    # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
+    return importances
+
+
+def plot_feat_importances(importances, feature_list, rf_num): 
+    plt.figure()
+    # Set the style
+    plt.style.use('seaborn-v0_8-colorblind')
+    # list of x locations for plotting
+    x_values = list(range(len(importances)))
+    # Make a bar chart
+    plt.barh(x_values, importances)
+    # Tick labels for x axis
+    plt.yticks(x_values, feature_list)
+    # Axis labels and title
+    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
+    plt.show()
+
+
+def plot_perm_importances(permute, sorted_idx, feature_list, rf_num):
+  # Sort the feature list based on 
+
+    new_feature_list = []
+    for index in sorted_idx:  
+        new_feature_list.append(feature_list[index])
+
+    fig, ax = plt.subplots()
+    ax.boxplot(permute.importances[sorted_idx].T,
+           vert=False, labels=new_feature_list)
+    ax.set_title("Permutation Importances {}".format(rf_num))
+    fig.tight_layout()
+    fig.savefig('/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/permutation_imp_{}.png'.format(rf_num))
+
+
+```
+
+```{python, baseline}
+#| echo: false
+
+baseline_day = r.baseline_by_date
+mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
+baseline_mae_err_text = round(mae_baseline_day_errors, 2)
+
+mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
+baseline_mse_err_text = round(mse_baseline_day_errors, 2)
+```
