@@ -79,11 +79,9 @@ baseline_by_date <- full_dataset %>%
 test <- full_dataset %>% 
   filter(date >= ymd('2020-01-01'))
 
-training <- anti_join(full_dataset, test) %>% 
-  select(-day_of_year)
+training <- anti_join(full_dataset, test)
 
-test <- test %>% 
-  select(-day_of_year)
+test <- test
 
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
