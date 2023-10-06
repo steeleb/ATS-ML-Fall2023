@@ -5,8 +5,7 @@ editor: visual
 jupyter: python3
 ---
 
-
-```{r env-set-up, echo=FALSE, message=FALSE}
+```{r env-set-up}
 library(tidyverse)
 library(reticulate)
 library(kableExtra)
@@ -15,6 +14,37 @@ library(kableExtra)
 is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
 rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
 
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+```
+
+```{python, import-modules}
+#| echo: false
+import sys
+import numpy as np
+import seaborn as sb
+
+import pandas as pd
+import datetime
+import tensorflow as tf
+import sklearn
+
+# import pydot
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+print(f"python version = {sys.version}")
+print(f"numpy version = {np.__version__}")
+print(f"tensorflow version = {tf.__version__}")
+
+# set random state
+rs = 37
+```
+
+## Read in temp data and make train-val-test 
+
+```{r raw_data}
 # read in temp data
 NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
 surf_temp <- NW_temp %>% 
@@ -49,7 +79,6 @@ weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregate
   mutate(feature = if_else(feature == 'Lake Granby',
                            'Granby Reservoir',
                            feature))
-
 # static
 static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
 
@@ -68,17 +97,25 @@ full_dataset <- full_dataset %>%
   filter(feature != 'Windy Gap Reservoir') %>% 
   mutate(day_of_year = yday(date))
 
-baseline_by_date <- full_dataset %>% 
-  group_by(day_of_year) %>% 
-  summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
-  left_join(full_dataset, .)
+```
 
+## Make train-val-test sets
+
+Test data will be from 2021 forward (2y of data)
+
+```{r tst}
 test <- full_dataset %>% 
-  filter(date >= ymd('2020-01-01'))
+  filter(date >= ymd('2021-01-01'))
 
+```
+
+### make a few iterations of train-val
+
+One will be leave-one-out by lake, the other splitting by timeseries in \~10y increments
+
+```{r train_val}
+#full training set
 training <- anti_join(full_dataset, test)
-
-test <- test
 
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
@@ -100,27 +137,23 @@ train6 <- training %>%
   filter(feature != 'Willow Creek Reservoir')
 val6 = anti_join(training, train6)
 
-# activate conda env
-use_condaenv('~/miniconda3/envs/env_ATSML/')
+# using time blocks
+train1_ts <- training %>% 
+  filter(!between(date, ymd('1984-01-01'), ymd('1995-01-01')))
+val1_ts = anti_join(training, train1_ts)
+train2_ts <- training %>% 
+  filter(!between(date, ymd('1995-01-01'), ymd('2005-01-01')))
+val2_ts = anti_join(training, train2_ts)
+train3_ts <- training %>% 
+  filter(!between(date, ymd('2005-01-01'), ymd('2015-01-01')))
+val3_ts = anti_join(training, train3_ts)
+train4_ts <- training %>% 
+  filter(!between(date, ymd('2015-01-01'), ymd('2021-01-01')))
+val4_ts = anti_join(training, train4_ts)
 
 ```
 
-```{python, import-modules}
-#| echo: false
-import sys
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import datetime
-import sklearn
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.tree import export_graphviz
-from sklearn.inspection import permutation_importance
-import pydot
-import matplotlib.pyplot as plt
-```
+### Bring over LOO to py
 
 ```{python, label-feature-setup}
 #| echo: false
@@ -188,64 +221,115 @@ val_features4 = np.array(val_features4)
 val_features5 = np.array(val_features5)
 val_features6 = np.array(val_features6)
 
-# set random state
-rs = 37
+
 ```
 
-```{python, importance-funcs}
+### And for ts chunks
+
+```{python timeseries-test-val}
 #| echo: false
-#| 
-def calc_importances(rf, feature_list):
-    # Get numerical feature importances
-    importances = list(rf.feature_importances_)
-    # List of tuples with variable and importance
-    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
-    # Sort the feature importances by most important first
-    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
-    # Print out the feature and importances 
-    # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
-    return importances
 
+# grab the values we want to predict
+labels_1_ts = np.array(r.train1_ts['value'])
+labels_2_ts = np.array(r.train2_ts['value'])
+labels_3_ts = np.array(r.train3_ts['value'])
+labels_4_ts = np.array(r.train4_ts['value'])
 
-def plot_feat_importances(importances, feature_list, rf_num): 
-    plt.figure()
-    # Set the style
-    plt.style.use('seaborn-v0_8-colorblind')
-    # list of x locations for plotting
-    x_values = list(range(len(importances)))
-    # Make a bar chart
-    plt.barh(x_values, importances)
-    # Tick labels for x axis
-    plt.yticks(x_values, feature_list)
-    # Axis labels and title
-    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
-    plt.show()
+# grab the values we want to predict
+val_labels_1_ts = np.array(r.val1_ts['value'])
+val_labels_2_ts = np.array(r.val2_ts['value'])
+val_labels_3_ts = np.array(r.val3_ts['value'])
+val_labels_4_ts = np.array(r.val4_ts['value'])
 
+# and remove the labels from the dataset containing the feature set
+features1_ts = (r.train1_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2_ts = (r.train2_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3_ts = (r.train3_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4_ts = (r.train4_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
 
-def plot_perm_importances(permute, sorted_idx, feature_list, rf_num):
-  # Sort the feature list based on 
+# and remove the labels from the dataset containing the feature set
+val_features1_ts = (r.val1_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2_ts = (r.val2_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3_ts = (r.val3_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4_ts = (r.val4_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
 
-    new_feature_list = []
-    for index in sorted_idx:  
-        new_feature_list.append(feature_list[index])
+# Convert to numpy array
+features1_ts = np.array(features1_ts)
+features2_ts = np.array(features2_ts)
+features3_ts = np.array(features3_ts)
+features4_ts = np.array(features4_ts)
 
-    fig, ax = plt.subplots()
-    ax.boxplot(permute.importances[sorted_idx].T,
-           vert=False, labels=new_feature_list)
-    ax.set_title("Permutation Importances {}".format(rf_num))
-    fig.tight_layout()
-    fig.savefig('/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/permutation_imp_{}.png'.format(rf_num))
-
+# Convert to numpy array
+val_features1_ts = np.array(val_features1_ts)
+val_features2_ts = np.array(val_features2_ts)
+val_features3_ts = np.array(val_features3_ts)
+val_features4_ts = np.array(val_features4_ts)
 
 ```
+
+### Make a baseline dataset
+
+```{r baseline}
+baseline_by_date <- full_dataset %>% 
+  group_by(day_of_year) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value),
+            n = n()) %>% 
+  left_join(full_dataset, .) %>% 
+  #remove days where there are less than or equal to 3 observations contributing to the mean
+  filter(n > 3)
+
+```
+
+### Calculate baseline error
 
 ```{python, baseline}
 #| echo: false
-
 baseline_day = r.baseline_by_date
 mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
 baseline_mae_err_text = round(mae_baseline_day_errors, 2)
 
 mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
 baseline_mse_err_text = round(mse_baseline_day_errors, 2)
+```
+
+## Quick look at output
+
+```{python}
+sb.displot(labels_1, kind="hist")
+plt.show()
+
+sb.displot(labels_2, kind="hist")
+plt.show()
+
+sb.displot(labels_3, kind="hist")
+plt.show()
+
+sb.displot(labels_4, kind="hist")
+plt.show()
+
+sb.displot(labels_5, kind="hist")
+plt.show()
+
+sb.displot(labels_6, kind="hist")
+plt.show()
+
+sb.displot(labels_1_ts, kind="hist")
+plt.show()
+
+sb.displot(labels_2_ts, kind="hist")
+plt.show()
+
+sb.displot(labels_3_ts, kind="hist")
+plt.show()
+
+sb.displot(labels_4_ts, kind="hist")
+plt.show()
 ```

@@ -19,3 +19,4 @@ Dr. Elizabeth Barnes, Colorado State University.
 - pip install -U scikit-image
 - pip install shap
 - conda install pandas
+- pip install chardet
