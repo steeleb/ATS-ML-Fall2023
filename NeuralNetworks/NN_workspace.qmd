@@ -29,6 +29,10 @@ import pandas as pd
 import datetime
 import tensorflow as tf
 import sklearn
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
 
 # import pydot
 import matplotlib.pyplot as plt
@@ -42,7 +46,7 @@ print(f"tensorflow version = {tf.__version__}")
 rs = 37
 ```
 
-## Read in temp data and make train-val-test 
+## Read in temp data and make train-val-test
 
 ```{r raw_data}
 # read in temp data
@@ -113,10 +117,70 @@ test <- full_dataset %>%
 
 One will be leave-one-out by lake, the other splitting by timeseries in \~10y increments
 
-```{r train_val}
+```{r training_set}
 #full training set
-training <- anti_join(full_dataset, test)
+training <- anti_join(full_dataset, test) %>% 
+  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
+                ~ . + 0.0001))
+```
 
+#### Look at the training data
+
+```{r}
+make_histogram <- function(param){
+  param_sym = sym(param)
+  ggplot(training, aes(x = !!{{ param_sym }})) +
+    geom_histogram() +
+    theme_bw()
+}
+
+param_list = names(training)
+param_list = param_list[8:length(param_list)]
+
+map(param_list, make_histogram)
+```
+
+Precip data needs log transformation before standardization due to histo frequency.
+
+Wind data needs sqrt transormation.
+
+```{python make-pre-processing-pipeline}
+log_transformer = FunctionTransformer(np.log, 
+  inverse_func=np.exp, 
+  feature_names_out = "one-to-one")
+sqrt_transformer = FunctionTransformer(np.sqrt, 
+  inverse_func=np.square,
+  feature_names_out = "one-to-one")
+
+precip_pipeline = make_pipeline(
+  log_transformer,
+  StandardScaler()
+)
+
+wind_pipeline = make_pipeline(
+  sqrt_transformer,
+  StandardScaler()
+)
+
+precip_vars = ["tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"]
+
+wind_vars = ["min_wind_mps_1", "mean_wind_mps_1", "max_wind_mps_1",
+  "min_wind_mps_3", "mean_wind_mps_3", "max_wind_mps_3",
+  "min_wind_mps_5", "mean_wind_mps_5", "max_wind_mps_5"]
+
+std_vars = ["value", "day_of_year",
+  "max_temp_degC_1", "mean_temp_degC_1", "min_temp_degC_1", "tot_sol_rad_Wpm2_1",
+  "max_temp_degC_3", "mean_temp_degC_3", "min_temp_degC_3", "tot_sol_rad_Wpm2_3", 
+  "max_temp_degC_5", "mean_temp_degC_5", "min_temp_degC_5", "tot_sol_rad_Wpm2_5"]
+
+preprocessing = ColumnTransformer([
+  ("precip", precip_pipeline, precip_vars),
+  ("wind", wind_pipeline, wind_vars),
+  ("std", StandardScaler(), std_vars)
+])
+```
+
+```{r make-train-val-sets}
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
   filter(feature != 'Grand Lake')
@@ -150,29 +214,55 @@ val3_ts = anti_join(training, train3_ts)
 train4_ts <- training %>% 
   filter(!between(date, ymd('2015-01-01'), ymd('2021-01-01')))
 val4_ts = anti_join(training, train4_ts)
-
 ```
 
-### Bring over LOO to py
+### Bring data over to py and apply preprocessing pipeline
 
-```{python, label-feature-setup}
+```{python, train-val-to-py}
 #| echo: false
+#bring data over from R
+train1 = r.train1
+train2 = r.train2
+train3 = r.train3
+train4 = r.train4
+train5 = r.train5
+train6 = r.train6
+val1 = r.val1
+val2 = r.val2
+val3 = r.val3
+val4 = r.val4
+val5 = r.val5
+val6 = r.val6
+
+train1_ts = r.train1_ts
+train2_ts = r.train2_ts
+train3_ts = r.train3_ts
+train4_ts = r.train4_ts
+
+val1_ts = r.val1_ts
+val2_ts = r.val2_ts
+val3_ts = r.val3_ts
+val4_ts = r.val4_ts
+```
+
+#### Format LOO dataset for algo dev
+
+```{python labels-features}
+# grab the values we want to predict
+labels_1 = np.array(train1['value'])
+labels_2 = np.array(train2['value'])
+labels_3 = np.array(train3['value'])
+labels_4 = np.array(train4['value'])
+labels_5 = np.array(train5['value'])
+labels_6 = np.array(train6['value'])
 
 # grab the values we want to predict
-labels_1 = np.array(r.train1['value'])
-labels_2 = np.array(r.train2['value'])
-labels_3 = np.array(r.train3['value'])
-labels_4 = np.array(r.train4['value'])
-labels_5 = np.array(r.train5['value'])
-labels_6 = np.array(r.train6['value'])
-
-# grab the values we want to predict
-val_labels_1 = np.array(r.val1['value'])
-val_labels_2 = np.array(r.val2['value'])
-val_labels_3 = np.array(r.val3['value'])
-val_labels_4 = np.array(r.val4['value'])
-val_labels_5 = np.array(r.val5['value'])
-val_labels_6 = np.array(r.val6['value'])
+val_labels_1 = np.array(val1['value'])
+val_labels_2 = np.array(val2['value'])
+val_labels_3 = np.array(val3['value'])
+val_labels_4 = np.array(val4['value'])
+val_labels_5 = np.array(val5['value'])
+val_labels_6 = np.array(val6['value'])
 
 # and remove the labels from the dataset containing the feature set
 features1 = (r.train1
@@ -221,44 +311,43 @@ val_features4 = np.array(val_features4)
 val_features5 = np.array(val_features5)
 val_features6 = np.array(val_features6)
 
-
 ```
 
-### And for ts chunks
+#### And for ts chunks
 
 ```{python timeseries-test-val}
 #| echo: false
 
 # grab the values we want to predict
-labels_1_ts = np.array(r.train1_ts['value'])
-labels_2_ts = np.array(r.train2_ts['value'])
-labels_3_ts = np.array(r.train3_ts['value'])
-labels_4_ts = np.array(r.train4_ts['value'])
+labels_1_ts = np.array(train1_ts['value'])
+labels_2_ts = np.array(train2_ts['value'])
+labels_3_ts = np.array(train3_ts['value'])
+labels_4_ts = np.array(train4_ts['value'])
 
 # grab the values we want to predict
-val_labels_1_ts = np.array(r.val1_ts['value'])
-val_labels_2_ts = np.array(r.val2_ts['value'])
-val_labels_3_ts = np.array(r.val3_ts['value'])
-val_labels_4_ts = np.array(r.val4_ts['value'])
+val_labels_1_ts = np.array(val1_ts['value'])
+val_labels_2_ts = np.array(val2_ts['value'])
+val_labels_3_ts = np.array(val3_ts['value'])
+val_labels_4_ts = np.array(val4_ts['value'])
 
 # and remove the labels from the dataset containing the feature set
-features1_ts = (r.train1_ts
+features1_ts = (train1_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-features2_ts = (r.train2_ts
+features2_ts = (train2_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-features3_ts = (r.train3_ts
+features3_ts = (train3_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-features4_ts = (r.train4_ts
+features4_ts = (train4_ts
   .drop(['value', 'feature', 'date'], axis = 1))
 
 # and remove the labels from the dataset containing the feature set
-val_features1_ts = (r.val1_ts
+val_features1_ts = (val1_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-val_features2_ts = (r.val2_ts
+val_features2_ts = (val2_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-val_features3_ts = (r.val3_ts
+val_features3_ts = (val3_ts
   .drop(['value', 'feature', 'date'], axis = 1))
-val_features4_ts = (r.val4_ts
+val_features4_ts = (val4_ts
   .drop(['value', 'feature', 'date'], axis = 1))
 
 # Convert to numpy array
@@ -288,7 +377,7 @@ baseline_by_date <- full_dataset %>%
 
 ```
 
-### Calculate baseline error
+#### Calculate baseline error
 
 ```{python, baseline}
 #| echo: false
@@ -300,36 +389,23 @@ mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_d
 baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
 
-## Quick look at output
+## 
 
-```{python}
-sb.displot(labels_1, kind="hist")
-plt.show()
+```{python, preproc-loo}
+#| echo: false
+def preproc_train(data):
+  pp = preprocessing.fit_transform(data)
+  df = pd.DataFrame(
+    pp, 
+    columns = preprocessing.get_feature_names_out(),
+    index = data.index
+  )
+  return df
 
-sb.displot(labels_2, kind="hist")
-plt.show()
-
-sb.displot(labels_3, kind="hist")
-plt.show()
-
-sb.displot(labels_4, kind="hist")
-plt.show()
-
-sb.displot(labels_5, kind="hist")
-plt.show()
-
-sb.displot(labels_6, kind="hist")
-plt.show()
-
-sb.displot(labels_1_ts, kind="hist")
-plt.show()
-
-sb.displot(labels_2_ts, kind="hist")
-plt.show()
-
-sb.displot(labels_3_ts, kind="hist")
-plt.show()
-
-sb.displot(labels_4_ts, kind="hist")
-plt.show()
+train1_df = preproc_df(train1)
+train2_df = preproc_df(train2)
+train3_df = preproc_df(train3)
+train4_df = preproc_df(train4)
+train5_df = preproc_df(train5)
+train6_df = preproc_df(train6)
 ```
