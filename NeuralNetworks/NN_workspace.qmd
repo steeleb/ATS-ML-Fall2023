@@ -28,6 +28,10 @@ import seaborn as sb
 import pandas as pd
 import datetime
 import tensorflow as tf
+# Let's import some different things we will use to build the neural network
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense, Input, Dropout, Softmax
+
 import sklearn
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.pipeline import make_pipeline
@@ -107,10 +111,19 @@ full_dataset <- full_dataset %>%
 
 Test data will be from 2021 forward (2y of data)
 
-```{r tst}
+```{r test-r}
 test <- full_dataset %>% 
-  filter(date >= ymd('2021-01-01'))
+  filter(date >= ymd('2021-01-01')) %>% 
+  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
+                ~ . + 0.0001))
+```
 
+```{python test-py}
+test = r.test
+# grab the values we want to predict
+test_labels = np.array(test['value'])
+test_features = (test
+  .drop(['value', 'feature', 'date'], axis = 1))
 ```
 
 ### make a few iterations of train-val
@@ -124,7 +137,7 @@ training <- anti_join(full_dataset, test) %>%
                 ~ . + 0.0001))
 ```
 
-#### Look at the training data
+### Look at the training data
 
 ```{r}
 make_histogram <- function(param){
@@ -313,6 +326,38 @@ val_features6 = np.array(val_features6)
 
 ```
 
+```{python, preproc-loo}
+#| echo: false
+def preproc(train, val, test):
+  pp = preprocessing.fit(train)
+  train_pp = pp.transform(train)
+  test_pp = pp.transform(test)
+  val_pp = pp.transform(val)
+  train_df = pd.DataFrame(
+    train_pp,
+    columns = pp.get_feature_names_out(),
+    index = train.index
+  )
+  val_df = pd.DataFrame(
+    val_pp,
+    columns = pp.get_feature_names_out(),
+    index = val.index
+  )
+  test_df = pd.DataFrame(
+    test_pp,
+    columns = pp.get_feature_names_out(),
+    index = test.index
+  )
+  return train_df, val_df, test_df
+
+train1_df, val1_df, test_df_1 = preproc(train1, val1, test)
+train2_df, val2_df, test_df_2 = preproc(train2, val2, test)
+train3_df, val3_df, test_df_3 = preproc(train3, val3, test)
+train4_df, val4_df, test_df_4 = preproc(train4, val4, test)
+train5_df, val5_df, test_df_5 = preproc(train5, val5, test)
+train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
+```
+
 #### And for ts chunks
 
 ```{python timeseries-test-val}
@@ -364,7 +409,15 @@ val_features4_ts = np.array(val_features4_ts)
 
 ```
 
-### Make a baseline dataset
+```{python, preproc-loo}
+#| echo: false
+train1_ts_df, val1_ts_df, test_df_ts_1 = preproc(train1_ts, val1_ts, test)
+train2_ts_df, val2_ts_df, test_df_ts_2 = preproc(train2_ts, val2_ts, test)
+train3_ts_df, val3_ts_df, test_df_ts_3 = preproc(train3_ts, val3_ts, test)
+train4_ts_df, val4_ts_df, test_df_ts_4 = preproc(train4_ts, val4_ts, test)
+```
+
+## Make a baseline dataset
 
 ```{r baseline}
 baseline_by_date <- full_dataset %>% 
@@ -377,7 +430,7 @@ baseline_by_date <- full_dataset %>%
 
 ```
 
-#### Calculate baseline error
+### Calculate baseline error
 
 ```{python, baseline}
 #| echo: false
@@ -389,23 +442,71 @@ mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_d
 baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
 
-## 
+## Make NN architecture
 
-```{python, preproc-loo}
-#| echo: false
-def preproc_train(data):
-  pp = preprocessing.fit_transform(data)
-  df = pd.DataFrame(
-    pp, 
-    columns = preprocessing.get_feature_names_out(),
-    index = data.index
-  )
-  return df
+```{python build-compile-model}
+def build_model(x_train, y_train, settings):
+    # create input layer
+    input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
 
-train1_df = preproc_df(train1)
-train2_df = preproc_df(train2)
-train3_df = preproc_df(train3)
-train4_df = preproc_df(train4)
-train5_df = preproc_df(train5)
-train6_df = preproc_df(train6)
+    # create hidden layers each with specific number of nodes
+    assert len(settings["hiddens"]) == len(
+        settings["activations"]
+    ), "hiddens and activations settings must be the same length."
+
+    # add dropout layer
+    layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(layers)
+
+    for hidden, activation in zip(settings["hiddens"], settings["activations"]):
+        layers = tf.keras.layers.Dense(
+            units=hidden,
+            activation=activation,
+            use_bias=True,
+            kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
+            bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+            kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+        )(layers)
+
+    # create output layer
+    output_layer = tf.keras.layers.Dense(
+        units=y_train.shape[-1],
+        activation="softmax",
+        use_bias=True,
+        bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
+        kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
+    )(layers)
+
+    # construct the model
+    model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+    model.summary()
+
+    return model
+
+
+def compile_model(model, settings):
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=settings["learning_rate"]),
+        loss=tf.keras.losses.MAPE()
+    )
+    return model
+```
+
+```{python hyperparm-settings -train}
+settings = {
+    "hiddens": [3, 3],
+    "activations": ["relu", "relu"],
+    "learning_rate": 0.001,
+    "random_seed": 57,
+    "max_epochs": 1000,
+    "batch_size": 32,
+    "patience": 10,
+    "dropout_rate": 0,
+}
+
+tf.keras.backend.clear_session()
+tf.keras.utils.set_random_seed(settings["random_seed"])
+
+
+model = build_model(Xtrain, Ttrain, settings)
+model = compile_model(model, settings)
 ```
