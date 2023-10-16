@@ -9,6 +9,13 @@ editor:
     theme: sky
 ---
 
+[GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
+
+## Questions:
+
+- I'd like the train/val figures to be plotted as MSE in degrees, not transformed values. If I use a Normalization layer within the DNN instead of the sklearn pipeline, will these show up as 'real values'? Did I just end up at a dead end for inverse processing of those values?
+- 
+
 ```{r env-set-up, echo=FALSE, message=FALSE}
 library(tidyverse)
 library(reticulate)
@@ -18,6 +25,35 @@ library(kableExtra)
 is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
 rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
 
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+```
+
+```{python import-modules}
+#| echo: false
+import sys
+import numpy as np
+import seaborn as sb
+
+import pandas as pd
+import datetime
+import tensorflow as tf
+# Let's import some different things we will use to build the neural network
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense, Input, Dropout, Softmax
+
+import sklearn
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.compose import ColumnTransformer
+
+# import pydot
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+```
+
+```{r raw_data, echo=FALSE, message=FALSE}
 # read in temp data
 NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
 surf_temp <- NW_temp %>% 
@@ -52,7 +88,6 @@ weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregate
   mutate(feature = if_else(feature == 'Lake Granby',
                            'Granby Reservoir',
                            feature))
-
 # static
 static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
 
@@ -71,18 +106,33 @@ full_dataset <- full_dataset %>%
   filter(feature != 'Windy Gap Reservoir') %>% 
   mutate(day_of_year = yday(date))
 
-baseline_by_date <- full_dataset %>% 
-  group_by(day_of_year) %>% 
-  summarize(mean_temp_by_date_deg_C = mean(value)) %>% 
-  left_join(full_dataset, .)
+```
 
+```{r test-train-r, echo=FALSE, message=FALSE}
 test <- full_dataset %>% 
-  filter(date >= ymd('2020-01-01'))
+  filter(date >= ymd('2021-01-01')) 
 
-training <- anti_join(full_dataset, test)
+#full training set
+training <- anti_join(full_dataset, test) %>% 
+  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
+                ~ . + 0.0001))
 
-test <- test
+test <- test %>% 
+  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
+                ~ . + 0.0001))
+```
 
+```{python test-py}
+#| echo: false
+
+test = r.test
+# grab the values we want to predict
+test_labels = np.array(test['value'])
+test_features = (test
+  .drop(['value', 'feature', 'date'], axis = 1))
+```
+
+```{r make-train-val-sets, echo=FALSE, message=FALSE}
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
   filter(feature != 'Grand Lake')
@@ -103,148 +153,40 @@ train6 <- training %>%
   filter(feature != 'Willow Creek Reservoir')
 val6 = anti_join(training, train6)
 
-# activate conda env
-use_condaenv('~/miniconda3/envs/env_ATSML/')
+# using time blocks
+train1_ts <- training %>% 
+  filter(!between(date, ymd('1984-01-01'), ymd('1995-01-01')))
+val1_ts = anti_join(training, train1_ts)
+train2_ts <- training %>% 
+  filter(!between(date, ymd('1995-01-01'), ymd('2005-01-01')))
+val2_ts = anti_join(training, train2_ts)
+train3_ts <- training %>% 
+  filter(!between(date, ymd('2005-01-01'), ymd('2015-01-01')))
+val3_ts = anti_join(training, train3_ts)
+train4_ts <- training %>% 
+  filter(!between(date, ymd('2015-01-01'), ymd('2021-01-01')))
+val4_ts = anti_join(training, train4_ts)
+```
+
+## Scientific motivation and problem statement:
+
+Water temperature is often an indicator of water quality, as it governs much of the biological activity in freshwater. While temperature is an important parameter to monitor in freshwater lakes, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors.
+
+In this example, I will use a simple dense neural network to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water, the municipal subdistrict that delivers drinking water to approximately 1 million people in northern Colorado and irrigation water for ~600,000 acres of land. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance). To capture seasonal dynamics, I've also included the numerical day of year to the feature set. The NLDAS data have been summarized for the previous day's weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
+
+```{r baseline, echo=FALSE, message=FALSE}
+baseline_by_date <- full_dataset %>% 
+  group_by(day_of_year) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value),
+            n = n()) %>% 
+  left_join(full_dataset, .) %>% 
+  #remove days where there are less than or equal to 3 observations contributing to the mean
+  filter(n > 3)
 
 ```
 
-```{python, import-modules}
+```{python baseline-error}
 #| echo: false
-import sys
-import numpy as np
-import matplotlib.pyplot as plt
-
-import pandas as pd
-import datetime
-import sklearn
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.tree import export_graphviz
-from sklearn.inspection import permutation_importance
-import pydot
-import matplotlib.pyplot as plt
-```
-
-```{python, label-feature-setup}
-#| echo: false
-
-# grab the values we want to predict
-labels_1 = np.array(r.train1['value'])
-labels_2 = np.array(r.train2['value'])
-labels_3 = np.array(r.train3['value'])
-labels_4 = np.array(r.train4['value'])
-labels_5 = np.array(r.train5['value'])
-labels_6 = np.array(r.train6['value'])
-
-# grab the values we want to predict
-val_labels_1 = np.array(r.val1['value'])
-val_labels_2 = np.array(r.val2['value'])
-val_labels_3 = np.array(r.val3['value'])
-val_labels_4 = np.array(r.val4['value'])
-val_labels_5 = np.array(r.val5['value'])
-val_labels_6 = np.array(r.val6['value'])
-
-# and remove the labels from the dataset containing the feature set
-features1 = (r.train1
-  .drop(['value', 'feature', 'date'], axis = 1))
-features2 = (r.train2
-  .drop(['value', 'feature', 'date'], axis = 1))
-features3 = (r.train3
-  .drop(['value', 'feature', 'date'], axis = 1))
-features4 = (r.train4
-  .drop(['value', 'feature', 'date'], axis = 1))
-features5 = (r.train5
-  .drop(['value', 'feature', 'date'], axis = 1))
-features6 = (r.train6
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# and remove the labels from the dataset containing the feature set
-val_features1 = (r.val1
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features2 = (r.val2
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features3 = (r.val3
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features4 = (r.val4
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features5 = (r.val5
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features6 = (r.val6
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# Saving feature names for later use
-feature_list = list(features1.columns)
-
-# Convert to numpy array
-features1 = np.array(features1)
-features2 = np.array(features2)
-features3 = np.array(features3)
-features4 = np.array(features4)
-features5 = np.array(features5)
-features6 = np.array(features6)
-
-# Convert to numpy array
-val_features1 = np.array(val_features1)
-val_features2 = np.array(val_features2)
-val_features3 = np.array(val_features3)
-val_features4 = np.array(val_features4)
-val_features5 = np.array(val_features5)
-val_features6 = np.array(val_features6)
-
-# set random state
-rs = 37
-```
-
-```{python, importance-funcs}
-#| echo: false
-#| 
-def calc_importances(rf, feature_list):
-    # Get numerical feature importances
-    importances = list(rf.feature_importances_)
-    # List of tuples with variable and importance
-    feature_importances = [(feature, round(importance, 2)) for feature, importance in zip(feature_list, importances)]
-    # Sort the feature importances by most important first
-    feature_importances = sorted(feature_importances, key = lambda x: x[1], reverse = True)
-    # Print out the feature and importances 
-    # [print('Variable: {:20} Importance: {}'.format(*pair)) for pair in feature_importances];
-    return importances
-
-
-def plot_feat_importances(importances, feature_list, rf_num): 
-    plt.figure()
-    # Set the style
-    plt.style.use('seaborn-v0_8-colorblind')
-    # list of x locations for plotting
-    x_values = list(range(len(importances)))
-    # Make a bar chart
-    plt.barh(x_values, importances)
-    # Tick labels for x axis
-    plt.yticks(x_values, feature_list)
-    # Axis labels and title
-    plt.xlabel('Importance'); plt.ylabel('Variable'); plt.title('Variable Importances {}'.format(rf_num))
-    plt.show()
-
-
-def plot_perm_importances(permute, sorted_idx, feature_list, rf_num):
-  # Sort the feature list based on 
-
-    new_feature_list = []
-    for index in sorted_idx:  
-        new_feature_list.append(feature_list[index])
-
-    fig, ax = plt.subplots()
-    ax.boxplot(permute.importances[sorted_idx].T,
-           vert=False, labels=new_feature_list)
-    ax.set_title("Permutation Importances {}".format(rf_num))
-    fig.tight_layout()
-    fig.savefig('/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/permutation_imp_{}.png'.format(rf_num))
-
-
-```
-
-```{python, baseline}
-#| echo: false
-
 baseline_day = r.baseline_by_date
 mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
 baseline_mae_err_text = round(mae_baseline_day_errors, 2)
@@ -253,425 +195,833 @@ mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_d
 baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
 
-[GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
-
-## Scientific motivation and problem statement:
-
-Water temperature is often an indicator of water quality, as it governs much of the biological activity in freshwater. While temperature is an important parameter to monitor in freshwater lakes, manual monitoring of waterbodies (by physically visiting a site) and sensor networks to monitor water temperature, are costly endeavors.
-
-In this example, I will use Random Forest to estimate water surface temperature for reservoirs with long manual monitoring data from Northern Water. The features that I will be using to estimate surface temperature include summary NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind) as well as static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance).
-
-The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.
+The comparative baseline for this analysis will be the day-of-year average water temperature across all lakes and years, where there are at least 3 values contributing to the mean. The baseline estimates result in a MAE of `r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg C.
 
 In addition to the manual sampling record that is maintained by Northern Water (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates from the Landsat constellation, Landsat 4-9 (n = `r nrow(NW_estimates)`). These thermal estimates are well-aligned with the manual monitoring data for the 7 reservoirs and have been bias-corrected for over estimates in the warmest months. 'Surface temperature' in the manual sampling record for this example is any measured temperature at \>= 1m depth. I retain only the top-most value for temperature. Static variables are only available for 6 of 7 reservoirs, so Windy Gap reservoir has been dropped from this analysis.
 
-```{r static-vars-table, echo = F}
-static %>% 
-  kbl(format = 'markdown', 
-      caption = 'Static variables used in the Random Forest algorithm. Windy Gap
-Reservoir has incomplete data and has been dropped from this analysis.')
-```
-
-Eventual implementation of this algorithm will include forecasting of temperature for these lakes as well as lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that the algorithm is not overfit to these specific lakes.
-
-No pre-processing (i.e. regularization) was completed for these data, as decision trees make purely empirical decisions, and that type of pre-processing is not usually necessary. I have pre-processed the NLDAS data to provide summaries of the previous day weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction.
+All precipitation data are right skewed heavily biased to low precip values including zero, to account for this and make the distribution more normal, I added 0.001 to each value and applied a square root transformation to this subset. The wind data were left skewed and to transform the distribution, I used a log function. All features and inputs were then scaled using the `StandardScaler()` function to get the values closer to zero, which are preferable for neural networks. These transformations were completed using the `make_pipeline()` function from the sklearn package. 
 
 ## Training/Validation/Testing
 
-During data exploration, it was clear that there are site-level differences in temperature range and general seasonal response for each water body. These differences are likely due to static variables that differentiate these water bodies. That said, if I add in site-level information, the algorithm may have a propensity to "learn" those key attributes and likely overfit to the data, not allowing for generalization beyond these lakes. I will need to look at the RF trees, feature importances, and permutation importances to make sure these features do drive the results of the model (which might indicate that the model is overfit to the identifying characteristics).
+Eventual implementation of this algorithm will include forecasting of temperature for these lakes as well as lakes that have only Landsat-derived temperature estimates and that are not included in this dataset. Because I want this algorithm to perform well on new lakes, I want to take steps to make sure that the algorithm is not overfit to these specific lakes static characteristics. While this information may be important for alogorithm development, the model may have a propensity to "learn" those key attributes and overfit to the data, not allowing for generalization beyond these lakes. 
 
-For training and validation I use a leave-one-out method that will result in six random forest models where each iteration will use data from a single lake for validation and the other five for training. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2020 across all lakes.
+For training and validation I will use two techniques. First, a leave-one-out method that will result in six NN models where each iteration will use data from a single lake for validation and the other five for training. Because the random forest models did not appear to overfit to the static variables, I'm also trying a timeseries method that will subset the data into ~10 year increments and leave one increment out per training and use it for validation per iteration. Since the intended implementation will be daily forecasts, testing performance will be assessed through hindcasting. The hindcast dataset is a holdout dataset beginning in 2021 across all lakes.
+
+```{python make-pre-processing-pipeline}
+#| echo: false
+
+log_transformer = FunctionTransformer(np.log, 
+  inverse_func=np.exp, 
+  feature_names_out = "one-to-one")
+sqrt_transformer = FunctionTransformer(np.sqrt, 
+  inverse_func=np.square,
+  feature_names_out = "one-to-one")
+
+precip_pipeline = make_pipeline(
+  log_transformer,
+  StandardScaler()
+)
+
+wind_pipeline = make_pipeline(
+  sqrt_transformer,
+  StandardScaler()
+)
+
+precip_vars = ["tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"]
+
+wind_vars = ["min_wind_mps_1", "mean_wind_mps_1", "max_wind_mps_1",
+  "min_wind_mps_3", "mean_wind_mps_3", "max_wind_mps_3",
+  "min_wind_mps_5", "mean_wind_mps_5", "max_wind_mps_5"]
+
+std_vars = ["value", "day_of_year",
+  "max_temp_degC_1", "mean_temp_degC_1", "min_temp_degC_1", "tot_sol_rad_Wpm2_1",
+  "max_temp_degC_3", "mean_temp_degC_3", "min_temp_degC_3", "tot_sol_rad_Wpm2_3", 
+  "max_temp_degC_5", "mean_temp_degC_5", "min_temp_degC_5", "tot_sol_rad_Wpm2_5"]
+
+preprocessing = ColumnTransformer([
+  ("precip", precip_pipeline, precip_vars),
+  ("wind", wind_pipeline, wind_vars),
+  ("std", StandardScaler(), std_vars)
+])
+```
+
+```{python train-val-to-py}
+#| echo: false
+#bring data over from R
+train1 = r.train1
+train2 = r.train2
+train3 = r.train3
+train4 = r.train4
+train5 = r.train5
+train6 = r.train6
+val1 = r.val1
+val2 = r.val2
+val3 = r.val3
+val4 = r.val4
+val5 = r.val5
+val6 = r.val6
+
+train1_ts = r.train1_ts
+train2_ts = r.train2_ts
+train3_ts = r.train3_ts
+train4_ts = r.train4_ts
+
+val1_ts = r.val1_ts
+val2_ts = r.val2_ts
+val3_ts = r.val3_ts
+val4_ts = r.val4_ts
+```
+
+```{python preproc-loo}
+#| echo: false
+def preproc(train, val, test):
+  pp = preprocessing.fit(train)
+  train_pp = pp.fit_transform(train)
+  test_pp = pp.fit_transform(test)
+  val_pp = pp.fit_transform(val)
+  train_df = pd.DataFrame(
+    train_pp,
+    columns = pp.get_feature_names_out(),
+    index = train.index
+  )
+  val_df = pd.DataFrame(
+    val_pp,
+    columns = pp.get_feature_names_out(),
+    index = val.index
+  )
+  test_df = pd.DataFrame(
+    test_pp,
+    columns = pp.get_feature_names_out(),
+    index = test.index
+  )
+  return train_df, val_df, test_df
+
+train1_df, val1_df, test_df_1 = preproc(train1, val1, test)
+train2_df, val2_df, test_df_2 = preproc(train2, val2, test)
+train3_df, val3_df, test_df_3 = preproc(train3, val3, test)
+train4_df, val4_df, test_df_4 = preproc(train4, val4, test)
+train5_df, val5_df, test_df_5 = preproc(train5, val5, test)
+train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
+```
+
+```{python preproc-ts}
+#| echo: false
+train1_ts_df, val1_ts_df, test_df_ts_1 = preproc(train1_ts, val1_ts, test)
+train2_ts_df, val2_ts_df, test_df_ts_2 = preproc(train2_ts, val2_ts, test)
+train3_ts_df, val3_ts_df, test_df_ts_3 = preproc(train3_ts, val3_ts, test)
+train4_ts_df, val4_ts_df, test_df_ts_4 = preproc(train4_ts, val4_ts, test)
+```
+
+```{python build-compile-model}
+#| echo: false
+def build_model(x_train, y_train, settings):
+  # create input layer
+  input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
+  
+  # # create hidden layers each with specific number of nodes
+  # assert len(settings["hiddens"]) == len(
+  #   settings["activations"]
+  # ), "hiddens and activations settings must be the same length."
+  
+  # add dropout layer
+  layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(input_layer)
+  
+  for hidden, activation in zip(settings["hiddens"], settings["activations"]):
+    layers = tf.keras.layers.Dense(
+      units=hidden,
+      activation=activation,
+      use_bias=True,
+      kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
+      bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+      kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+      )(layers)
+  
+  # create output layer
+  output_layer = tf.keras.layers.Dense(
+    units=1,
+    activation="linear",
+    use_bias=True,
+    bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
+    kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
+  )(layers)
+  
+  # construct the model
+  model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+  model.summary()
+  
+  return model
+
+
+def compile_model(model, settings):
+  model.compile(
+      optimizer=tf.keras.optimizers.Adam(
+        learning_rate=settings["learning_rate"],
+        ),
+      loss=tf.keras.losses.MeanSquaredError()
+  )
+  return model
+```
+
+```{python hyperparm-settings-train}
+#| echo: false
+settings = {
+    "hiddens": [3, 3],
+    "activations": ["relu", "relu"],
+    "learning_rate": 0.001,
+    "random_seed": 57,
+    "max_epochs": 1000,
+    "batch_size": 32,
+    "patience": 10,
+    "dropout_rate": 0,
+}
+
+tf.keras.backend.clear_session()
+tf.keras.utils.set_random_seed(settings["random_seed"])
+
+# define the early stopping callback
+early_stopping_callback = tf.keras.callbacks.EarlyStopping(
+  monitor="val_loss", 
+  patience=settings["patience"], 
+  restore_best_weights=True, 
+  mode="auto"
+)
+
+```
+
+```{python build-LOO}
+#| echo: false
+#| output: false
+model_1 = build_model(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  settings)
+model_1 = compile_model(model_1, settings)
+
+# train the model via model.fit
+history_1 = model_1.fit(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val1_df.drop('std__value', axis = 1), val1_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_2 = build_model(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  settings)
+model_2 = compile_model(model_2, settings)
+
+# train the model via model.fit
+history_2 = model_2.fit(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val2_df.drop('std__value', axis = 1), val2_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_3 = build_model(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  settings)
+model_3 = compile_model(model_3, settings)
+
+# train the model via model.fit
+history_3 = model_3.fit(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val3_df.drop('std__value', axis = 1), val3_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_4 = build_model(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  settings)
+model_4 = compile_model(model_4, settings)
+
+# train the model via model.fit
+history_4 = model_4.fit(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val4_df.drop('std__value', axis = 1), val4_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_5 = build_model(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  settings)
+model_5 = compile_model(model_5, settings)
+
+# train the model via model.fit
+history_5 = model_5.fit(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val5_df.drop('std__value', axis = 1), val5_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_6 = build_model(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  settings)
+model_6 = compile_model(model_6, settings)
+
+# train the model via model.fit
+history_6 = model_6.fit(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val6_df.drop('std__value', axis = 1), val6_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+```
+
+```{python build-ts}
+#| echo: false
+#| output: false
+
+model_1_ts = build_model(
+  train1_ts_df.drop('std__value', axis = 1), 
+  train1_ts_df['std__value'], 
+  settings)
+model_1_ts = compile_model(model_1_ts, settings)
+
+# train the model via model.fit
+history_1_ts = model_1_ts.fit(
+  train1_ts_df.drop('std__value', axis = 1), 
+  train1_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val1_ts_df.drop('std__value', axis = 1), val1_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_2_ts = build_model(
+  train2_ts_df.drop('std__value', axis = 1), 
+  train2_ts_df['std__value'], 
+  settings)
+model_2_ts = compile_model(model_2_ts, settings)
+
+# train the model via model.fit
+history_2_ts = model_2_ts.fit(
+  train2_ts_df.drop('std__value', axis = 1), 
+  train2_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val2_ts_df.drop('std__value', axis = 1), val2_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_3_ts = build_model(
+  train3_ts_df.drop('std__value', axis = 1), 
+  train3_ts_df['std__value'], 
+  settings)
+model_3_ts = compile_model(model_3_ts, settings)
+
+# train the model via model.fit
+history_3_ts = model_3_ts.fit(
+  train3_ts_df.drop('std__value', axis = 1), 
+  train3_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val3_ts_df.drop('std__value', axis = 1), val3_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+
+model_4_ts = build_model(
+  train4_ts_df.drop('std__value', axis = 1), 
+  train4_ts_df['std__value'], 
+  settings)
+model_4_ts = compile_model(model_4_ts, settings)
+
+# train the model via model.fit
+history_4_ts = model_4_ts.fit(
+  train4_ts_df.drop('std__value', axis = 1), 
+  train4_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val4_ts_df.drop('std__value', axis = 1), val4_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+```
 
 ## Results
 
-```{python, train}
+```{python train-1}
+#| echo: false
+fig1, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_1.history["loss"], label="training")
+axs[0].plot(history_1.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_1.history["loss"], label="training")
+axs[1].plot(history_1.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig1.suptitle("LOO dataset 1")
+```
+
+
+```{python train-2}
+#| echo: false
+fig2, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_2.history["loss"], label="training")
+axs[0].plot(history_2.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_2.history["loss"], label="training")
+axs[1].plot(history_2.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig2.suptitle("LOO dataset 2")
+```
+
+```{python train-3}
+#| echo: false
+fig3, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_3.history["loss"], label="training")
+axs[0].plot(history_3.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_3.history["loss"], label="training")
+axs[1].plot(history_3.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig3.suptitle("LOO dataset 3")
+```
+
+```{python train-4}
+#| echo: false
+fig4, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_4.history["loss"], label="training")
+axs[0].plot(history_4.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_4.history["loss"], label="training")
+axs[1].plot(history_4.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig4.suptitle("LOO dataset 4")
+```
+
+```{python train-5}
+#| echo: false
+fig5, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_5.history["loss"], label="training")
+axs[0].plot(history_5.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_5.history["loss"], label="training")
+axs[1].plot(history_5.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig5.suptitle("LOO dataset 5")
+```
+
+```{python train-6}
+#| echo: false
+fig6, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_6.history["loss"], label="training")
+axs[0].plot(history_6.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_6.history["loss"], label="training")
+axs[1].plot(history_6.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig6.suptitle("LOO dataset 6")
+```
+
+
+```{python train-ts-1}
+#| echo: false
+fig1ts, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_1.history["loss"], label="training")
+axs[0].plot(history_1.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_1.history["loss"], label="training")
+axs[1].plot(history_1.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig1ts.suptitle("TS dataset 1")
+```
+
+```{python train-ts-2}
+#| echo: false
+fig2ts, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_2.history["loss"], label="training")
+axs[0].plot(history_2.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_2.history["loss"], label="training")
+axs[1].plot(history_2.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig2ts.suptitle("TS dataset 2")
+```
+
+```{python train-ts-3}
+#| echo: false
+fig3ts, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_3.history["loss"], label="training")
+axs[0].plot(history_3.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_3.history["loss"], label="training")
+axs[1].plot(history_3.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig3ts.suptitle("TS dataset 3")
+```
+
+```{python train-ts-4}
+#| echo: false
+fig4ts, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_4.history["loss"], label="training")
+axs[0].plot(history_4.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_4.history["loss"], label="training")
+axs[1].plot(history_4.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig4ts.suptitle("TS dataset 4")
+```
+
+```{python show-val-loss}
+#| echo: false
+fig1.show()
+fig2.show()
+fig3.show()
+fig4.show()
+fig5.show()
+fig6.show()
+
+fig1ts.show()
+fig2ts.show()
+fig3ts.show()
+fig4ts.show()
+```
+
+
+```{python loo-calc-pred}
+#| echo: false
+#| output: false
+def calculate_vals(transformed_val, mean, std):
+  actual_val = (transformed_val * std) + mean
+  return actual_val
+
+mean_1 = train1['value'].mean()
+std_1 = train1['value'].std()
+pred_1 = model_1.predict(train1_df.drop('std__value', axis = 1))
+val_1 = model_1.predict(val1_df.drop('std__value', axis = 1))
+p_act_1 = calculate_vals(pred_1, mean_1, std_1)
+v_act_1 = calculate_vals(val_1, mean_1, std_1)
+
+mean_2 = train2['value'].mean()
+std_2 = train2['value'].std()
+pred_2 = model_2.predict(train2_df.drop('std__value', axis = 1))
+val_2 = model_2.predict(val2_df.drop('std__value', axis = 1))
+p_act_2 = calculate_vals(pred_2, mean_2, std_2)
+v_act_2 = calculate_vals(val_2, mean_2, std_2)
+
+mean_3 = train3['value'].mean()
+std_3 = train3['value'].std()
+pred_3 = model_3.predict(train3_df.drop('std__value', axis = 1))
+val_3 = model_3.predict(val3_df.drop('std__value', axis = 1))
+p_act_3 = calculate_vals(pred_3, mean_3, std_3)
+v_act_3 = calculate_vals(val_3, mean_3, std_3)
+
+mean_4 = train4['value'].mean()
+std_4 = train4['value'].std()
+pred_4 = model_4.predict(train4_df.drop('std__value', axis = 1))
+val_4 = model_4.predict(val4_df.drop('std__value', axis = 1))
+p_act_4 = calculate_vals(pred_4, mean_4, std_4)
+v_act_4 = calculate_vals(val_4, mean_4, std_4)
+
+mean_5 = train5['value'].mean()
+std_5 = train5['value'].std()
+pred_5 = model_5.predict(train5_df.drop('std__value', axis = 1))
+val_5 = model_5.predict(val5_df.drop('std__value', axis = 1))
+p_act_5 = calculate_vals(pred_5, mean_5, std_5)
+v_act_5 = calculate_vals(val_5, mean_5, std_5)
+
+mean_6 = train6['value'].mean()
+std_6 = train6['value'].std()
+pred_6 = model_6.predict(train6_df.drop('std__value', axis = 1))
+val_6 = model_6.predict(val6_df.drop('std__value', axis = 1))
+p_act_6 = calculate_vals(pred_6, mean_6, std_6)
+v_act_6 = calculate_vals(val_6, mean_6, std_6)
+
+```
+
+```{python ts-calc-pred}
 #| echo: false
 #| output: false
 
-#40, 7, 5, 5
+mean_1_ts = train1_ts['value'].mean()
+std_1_ts = train1_ts['value'].std()
+pred_1_ts = model_1_ts.predict(train1_ts_df.drop('std__value', axis = 1))
+val_1_ts = model_1_ts.predict(val1_ts_df.drop('std__value', axis = 1))
+p_act_1_ts = calculate_vals(pred_1_ts, mean_1_ts, std_1_ts)
+v_act_1_ts = calculate_vals(val_1_ts, mean_1_ts, std_1_ts)
 
-# Tunable Parameters for Model
-number_of_trees = 40
-tree_depth = 5 # 
-node_split = 15  # minimum number of training samples needed to split a node
-leaf_samples = 10   # minimum number of training samples required to make a leaf node
-criterion = 'absolute_error' 
+mean_2_ts = train2_ts['value'].mean()
+std_2_ts = train2_ts['value'].std()
+pred_2_ts = model_2_ts.predict(train2_ts_df.drop('std__value', axis = 1))
+val_2_ts = model_2_ts.predict(val2_ts_df.drop('std__value', axis = 1))
+p_act_2_ts = calculate_vals(pred_2_ts, mean_2_ts, std_2_ts)
+v_act_2_ts = calculate_vals(val_2_ts, mean_2_ts, std_2_ts)
 
+mean_3_ts = train3_ts['value'].mean()
+std_3_ts = train3_ts['value'].std()
+pred_3_ts = model_3_ts.predict(train3_ts_df.drop('std__value', axis = 1))
+val_3_ts = model_3_ts.predict(val3_ts_df.drop('std__value', axis = 1))
+p_act_3_ts = calculate_vals(pred_3_ts, mean_3_ts, std_3_ts)
+v_act_3_ts = calculate_vals(val_3_ts, mean_3_ts, std_3_ts)
 
-# Instantiate model with number of decision trees prescribed above
-# PARAMETERS:
-#     n_estimators: number of trees/ensembles
-#     random_state: random seed
-#     max_depth: maximum depth of each tree
-#     criterion: evaluation statistic to split a mode, 'mse'  or 'mae'
-#     min_samples_split: minimum number of samples needed to split a node
-#     min_samples_leaf: minimum number of samples needed to make a leaf
-#     for more, see: https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html#sklearn.ensemble.RandomForestRegressor
-rf = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-
-rf.fit(features1, labels_1)
-
-rf2 = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-                           
-rf2.fit(features2, labels_2)
-
-rf3 = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-                           
-rf3.fit(features3, labels_3)
-
-rf4 = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-                           
-rf4.fit(features4, labels_4)
-
-rf5 = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-                           
-rf5.fit(features5, labels_5)
-
-rf6 = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-                           
-rf6.fit(features6, labels_6)
+mean_4_ts = train4_ts['value'].mean()
+std_4_ts = train4_ts['value'].std()
+pred_4_ts = model_4_ts.predict(train4_ts_df.drop('std__value', axis = 1))
+val_4_ts = model_4_ts.predict(val4_ts_df.drop('std__value', axis = 1))
+p_act_4_ts = calculate_vals(pred_4_ts, mean_4_ts, std_4_ts)
+v_act_4_ts = calculate_vals(val_4_ts, mean_4_ts, std_4_ts)
 
 ```
 
-```{python, performance}
-#| echo: false
-#| output: false
+```{r assign-pred, echo=FALSE}
+train1$pred = py$p_act_1
+train2$pred = py$p_act_2
+train3$pred = py$p_act_3
+train4$pred = py$p_act_4
+train5$pred = py$p_act_5
+train6$pred = py$p_act_6
 
-# Use the forest's predict method on the test data
-predictions_1 = rf.predict(val_features1)
+val1$pred = py$v_act_1
+val2$pred = py$v_act_2
+val3$pred = py$v_act_3
+val4$pred = py$v_act_4
+val5$pred = py$v_act_5
+val6$pred = py$v_act_6
 
-# Use testing set to validate the performance
-# Print out the mean absolute error (MAE)
-mae_errors = abs(predictions_1 - val_labels_1)
-mae_err_text = round(np.mean(mae_errors), 2)
+train1_ts$pred = py$p_act_1_ts
+train2_ts$pred = py$p_act_2_ts
+train3_ts$pred = py$p_act_3_ts
+train4_ts$pred = py$p_act_4_ts
 
-# See its performance (mean squared errors)
-mse_errors = np.sqrt(np.mean((predictions_1 - val_labels_1)**2))
-mse_err_text = round(mse_errors, 2)
-
-
-# Use the forest's predict method on the test data
-predictions_2 = rf2.predict(val_features2)
-
-# Use testing set to validate the performance
-# Print out the mean absolute error (MAE)
-mae_errors_2 = abs(predictions_2 - val_labels_2)
-mae_err_text_2 = round(np.mean(mae_errors_2), 2)
-
-# See its performance (mean squared errors)
-mse_errors_2 = np.sqrt(np.mean((predictions_2 - val_labels_2)**2))
-mse_err_text_2 = round(mse_errors_2, 2)
-
-
-# Use the forest's predict method on the test data
-predictions_3 = rf3.predict(val_features3)
-
-# Use testing set to validate the performance
-# Print out the mean absolute error (MAE)
-mae_errors_3 = abs(predictions_3 - val_labels_3)
-mae_err_text_3 = round(np.mean(mae_errors_3), 2)
-
-# See its performance (mean squared errors)
-mse_errors_3 = np.sqrt(np.mean((predictions_3 - val_labels_3)**2))
-mse_err_text_3 = round(mse_errors_3, 2)
-
-
-# Use the forest's predict method on the test data
-predictions_4 = rf4.predict(val_features4)
-
-# Use testing set to validate the performance
-# Print out the mean absolute error (MAE)
-mae_errors_4 = abs(predictions_4 - val_labels_4)
-mae_err_text_4 = round(np.mean(mae_errors_4), 2)
-
-# See its performance (mean squared errors)
-mse_errors_4 = np.sqrt(np.mean((predictions_4 - val_labels_4)**2))
-mse_err_text_4 = round(mse_errors_4, 2)
-
-
-# Use the forest's predict method on the test data
-predictions_5 = rf5.predict(val_features5)
-
-# Print out the mean absolute error (MAE)
-mae_errors_5 = abs(predictions_5 - val_labels_5)
-mae_err_text_5 = round(np.mean(mae_errors_5), 2)
-
-# See its performance (mean squared errors)
-mse_errors_5 = np.sqrt(np.mean((predictions_5 - val_labels_5)**2))
-mse_err_text_5 = round(mse_errors_5, 2)
-
-
-# Use the forest's predict method on the test data
-predictions_6 = rf6.predict(val_features6)
-
-# Print out the mean absolute error (MAE)
-mae_errors_6 = abs(predictions_6 - val_labels_6)
-mae_err_text_6 = round(np.mean(mae_errors_6), 2)
-
-# See its performance (mean squared errors)
-mse_errors_6 = np.sqrt(np.mean((predictions_6 - val_labels_6)**2))
-mse_err_text_6 = round(mse_errors_6, 2)
-```
-
-```{r, echo = F}
-mae_error = c(py$mae_err_text, py$mae_err_text_2, py$mae_err_text_3, 
-              py$mae_err_text_4, py$mae_err_text_5, py$mae_err_text_6)
-mse_error = c(py$mse_err_text, py$mse_err_text_2, py$mse_err_text_3, 
-              py$mse_err_text_4, py$mse_err_text_5, py$mse_err_text_6)
-```
-
-### Hyper-parameter tuning
-
-I manually iterated on hyper-parameter settings during training of the model, tyring various number of estimators (30-70), maximum tree depth (3-7), node split minimum (5-20), and leaf split minimum (5-10;). Most attempts at hyper-parameter tuning did not result in significant changes in validation performance. I generally chose more conservative hyperparameters in as a way to assure that I do not overfit the training data (estmiators = `r py$number_of_trees`, maximum tree depth = `r py$tree_depth`, node split minimum = `r py$node_split`, leaf split = `r py$leaf_samples`) resulting in MAE of the validation ranging between `r min(mae_error)` and `r max(mae_error)` and MSE ranging between `r min(mse_error)` and `r max(mse_error)`.
-
-```{python, tree-viz}
-#| echo: false
-
-local_path = '/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures'
-
-tree = rf.estimators_[29]
-filename = 'RF_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
-
-tree = rf2.estimators_[29]
-filename = 'RF2_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
-
-tree = rf3.estimators_[29]
-filename = 'RF3_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
-
-tree = rf4.estimators_[29]
-filename = 'RF4_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
-
-tree = rf5.estimators_[29]
-filename = 'RF5_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
-
-tree = rf6.estimators_[29]
-filename = 'RF6_temp_tree'
-# Export the image to a dot file
-export_graphviz(tree, out_file = '{}/{}.dot'.format(local_path, filename), feature_names = feature_list, rounded = True, precision = 1)
+val1_ts$pred = py$v_act_1_ts
+val2_ts$pred = py$v_act_2_ts
+val3_ts$pred = py$v_act_3_ts
+val4_ts$pred = py$v_act_4_ts
 
 ```
 
-```{zsh, tree-save}
-#| echo: false
+### Leave one out validations
 
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree.png
-
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF2_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree2.png
-
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF3_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree3.png
-
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF4_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree4.png
-
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF5_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree5.png
-
-dot -Tpng ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/RF6_temp_tree.dot -o ~/Documents/GitHub/ATS-ML-Fall2023/RandomForest/figures/tree6.png
-```
-
-### Hindcasting application
-
-Because all random forest models in training and validation performed similarly across the ensemble and the feature importance and permutation importance (see Supporting Figures) were similar, I've decided to aggregate all data together and create a single RF algorithm to use for hindcasting. In an effort to make sure that this RF is built similarly to the previous leave-one-out models, I'll examine the RF tree, feature importance, and permutation importance.
-
-```{python, train-hindcast}
-#| echo: false
-#| output: false
-
-labels_train = np.array(r.training['value'])
-labels_test = np.array(r.test['value'])
-
-features_train = (r.training
-  .drop(['value', 'feature', 'date'], axis = 1))
-features_test = (r.test
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-rf_hind = RandomForestRegressor(n_estimators = number_of_trees, 
-                           random_state = rs,
-                           min_samples_split = node_split,
-                           min_samples_leaf = leaf_samples,
-                           criterion = criterion,
-                           max_depth = tree_depth)
-
-rf_hind.fit(features_train, labels_train)
-
-# Use the forest's predict method on the test data
-predictions = rf_hind.predict(features_train)
-
-# Use testing set to validate the performance
-# Print out the mean absolute error (MAE)
-mae_errors_hind = abs(predictions - labels_train)
-mae_err_text_hind = round(np.mean(mae_errors_hind), 2)
-
-# See its performance (mean squared errors)
-mse_errors_hind = np.sqrt(np.mean((predictions - labels_train)**2))
-mse_err_text_hind = round(mse_errors_hind, 2)
-
-plot_feat_importances(calc_importances(rf_hind, feature_list), feature_list, 'collective')
-
-# Single-pass permutation
-permute = permutation_importance(rf_hind, features_train, labels_train, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
-
-plot_perm_importances(permute, sorted_idx, feature_list, 'collective')
-
-```
-
-```{python, test-perf}
-#| echo: false
-
-# Use the forest's predict method on the test data
-test_predictions = rf_hind.predict(features_test)
-
-# Print out the mean absolute error (MAE)
-mae_errors_test = abs(test_predictions - labels_test)
-mae_err_text_test = round(np.mean(mae_errors_test), 2)
-
-# See its performance (mean squared errors)
-mse_errors_test = np.sqrt(np.mean((test_predictions - labels_test)**2))
-mse_err_text_test = round(mse_errors_test, 2)
-
-```
-![Permutation importance for variables in the hold out testing dataset.](figures/permutation_imp_collective.png)
-
-This iteration of the model shares similar feature importances to the leave-one-out models, indicating that this model architecture is similar to the previous and does not seem to fit according to the static variables. Whether or not this algorithm is overfit to the training data is unclear. The hindcast test dataset had a higer MAE (`r py$mae_err_text_test`) and MSE (`r py$mse_err_text_test`) than the leave-one-out validation datasets. Additionally, the collective training MAE (`r py$mae_err_text_hind`) and MSE (`r py$mse_err_text_hind`) was considerably lower than the test MAE and MSE. This indicates to me that the collective training decision may have resulted in overfitting of the data. 
-
-### Discussion
-
-If the collective model is not overfit, it is possible that error is propagated from the the remote sensing data, climatological patterns, or inadequate training features. The remote sensing data has about a 1 deg C error associated with it. 2020 forward was a particularly dry time in the climatological past - most of Colorado experience severe drought and many reservoirs were at historically low levels until this past year. Finally, it is possible that the included meteorological summary features are not adequate for robust training of the algorith - inclusion of heating degree days and cooling degree days could be a useful way to embed seasonal change as well as heat/cooling persistence. This could possibly help with the early season misalignment see in Figure 2. 
-
-
-```{r, timeseries, echo = F}
-#| label: val-dt-graph
-#| fig-cap: 'Datetime graph with actual values (black) and predicted values (orange), which shows the model is capturing the dirunal cycle.'
-pred = py$test_predictions
-test$pred = pred
-
-ggplot(test, aes(x = date, y = value)) +
-  facet_grid(feature ~ .) +
+```{r loo-val-figs, echo=F}
+ggplot(val1, aes(x = date, y = value)) +
   geom_point() +
   geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val2, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val3, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val4, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val5, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val6, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+```
+
+
+```{r ts-val-figs, echo = F}
+ggplot(val1_ts, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val2_ts, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val3_ts, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
+  theme_bw()
+
+ggplot(val4_ts, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = pred), color = 'orange') +
+  facet_grid(feature ~ .) +
   theme_bw()
 ```
 
-```{r, pred-obs, echo = F}
-#| label: pred-obs
-#| fig-cap: 'Scatter plot of predicted temperature and observed temperature at each of the 6 lakes in the dataset for the testing set. Black dashed line is 1:1.'
-ggplot(test, aes(x = value, y = pred ,color = feature)) +
-  geom_point() +
-  labs(x = expression(paste(italic('in situ'), , ' water temperature (deg C)')),
-       y = 'predicted water temeprature (deg C)', color = 'lake')+
-  coord_cartesian(xlim = c(0, 25),
-                  ylim = c(0, 25)) +
-  theme_bw() +
-  geom_abline(slope = 1, intercept = 0, lty = 2) +
-  scale_color_viridis_d()
+```{r, echo = F}
+Metrics::mse(val1$value, val1$pred)
+Metrics::mse(train1$value, train1$pred)
+
+Metrics::mse(val2$value, val2$pred)
+Metrics::mse(train2$value, train2$pred)
+
+Metrics::mse(val3$value, val3$pred)
+Metrics::mse(train3$value, train3$pred)
+
+Metrics::mse(val4$value, val4$pred)
+Metrics::mse(train4$value, train4$pred)
+
+Metrics::mse(val5$value, val5$pred)
+Metrics::mse(train5$value, train5$pred)
+
+Metrics::mse(val6$value, val6$pred)
+Metrics::mse(train6$value, train6$pred)
+
+Metrics::mse(val1_ts$value, val1_ts$pred)
+Metrics::mse(train1_ts$value, train1_ts$pred)
+
+Metrics::mse(val2_ts$value, val2_ts$pred)
+Metrics::mse(train2_ts$value, train2_ts$pred)
+
+Metrics::mse(val3_ts$value, val3_ts$pred)
+Metrics::mse(train3_ts$value, train3_ts$pred)
+
+Metrics::mse(val4_ts$value, val4_ts$pred)
+Metrics::mse(train4_ts$value, train4_ts$pred)
 ```
 
 
-## Supporting Figures
+### Hyper-parameter tuning
+ 
+Current settings:
 
 ```{python}
-#| echo: false
-#| label: feature-imporance
-#| fig-cap: 'Feature imporances across all leave-one-out validation datasets with consistent feature imporatnces across 5-day previous summaries and minimal importance of the waterbody.'
-
-plot_feat_importances(calc_importances(rf, feature_list), feature_list, 1)
-plot_feat_importances(calc_importances(rf2, feature_list), feature_list, 2)
-plot_feat_importances(calc_importances(rf3, feature_list), feature_list, 3)
-plot_feat_importances(calc_importances(rf4, feature_list), feature_list, 4)
-plot_feat_importances(calc_importances(rf5, feature_list), feature_list, 5)
-plot_feat_importances(calc_importances(rf6, feature_list), feature_list, 6)
-
+settings = {
+    "hiddens": [3, 3],
+    "activations": ["relu", "relu"],
+    "learning_rate": 0.001,
+    "random_seed": 57,
+    "max_epochs": 1000,
+    "batch_size": 32,
+    "patience": 10,
+    "dropout_rate": 0,
+}
 ```
 
-```{python, perm-imp}
-#| echo: false
-# Single-pass permutation
-permute = permutation_importance(rf, val_features1, val_labels_1, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
+<!-- ### Hindcasting application -->
 
-plot_perm_importances(permute, sorted_idx, feature_list, 1)
+<!-- ### Discussion -->
 
-# Single-pass permutation
-permute = permutation_importance(rf2, val_features2, val_labels_2, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
+<!-- ## Supporting Figures -->
 
-plot_perm_importances(permute, sorted_idx, feature_list, 2)
-
-# Single-pass permutation
-permute = permutation_importance(rf3, val_features3, val_labels_3, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
-
-plot_perm_importances(permute, sorted_idx, feature_list, 3)
-
-# Single-pass permutation
-permute = permutation_importance(rf4, val_features4, val_labels_4, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
-
-plot_perm_importances(permute, sorted_idx, feature_list, 4)
-
-# Single-pass permutation
-permute = permutation_importance(rf5, val_features5, val_labels_5, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
-
-plot_perm_importances(permute, sorted_idx, feature_list, 5)
-
-# Single-pass permutation
-permute = permutation_importance(rf6, val_features6, val_labels_6, n_repeats=10, 
-                                 random_state=rs)
-# Sort the importances
-sorted_idx = permute.importances_mean.argsort()
-
-plot_perm_importances(permute, sorted_idx, feature_list, 6)
-
-```
