@@ -1,11 +1,15 @@
 ---
-title: "Neural Networks Workspace"
-format: html
-editor: visual
-jupyter: python3
+title: "Estimation of Daily Water Temperature using Dense Neural Networks"
+author: "B Steele"
+date: today
+date-format: long
+format: pdf
+editor: 
+  visual:
+    theme: sky
 ---
 
-```{r env-set-up}
+```{r, env-set-up}
 library(tidyverse)
 library(reticulate)
 library(kableExtra)
@@ -52,7 +56,7 @@ rs = 37
 
 ## Read in temp data and make train-val-test
 
-```{r raw_data}
+```{r, raw_data}
 # read in temp data
 NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
 surf_temp <- NW_temp %>% 
@@ -111,12 +115,12 @@ full_dataset <- full_dataset %>%
 
 Test data will be from 2021 forward (2y of data)
 
-```{r test-r}
+```{r, test-r}
 test <- full_dataset %>% 
   filter(date >= ymd('2021-01-01')) 
 ```
 
-```{r training_set}
+```{r, training_set}
 #full training set
 training <- anti_join(full_dataset, test) %>% 
   mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
@@ -127,13 +131,12 @@ test <- test %>%
                 ~ . + 0.0001))
 ```
 
-```{python test-py}
+```{python, test-py}
 test = r.test
 # grab the values we want to predict
 test_labels = np.array(test['value'])
 test_features = (test
   .drop(['value', 'feature', 'date'], axis = 1))
-
 ```
 
 ### make a few iterations of train-val
@@ -160,7 +163,7 @@ Precip data needs log transformation before standardization due to histo frequen
 
 Wind data needs sqrt transormation.
 
-```{python make-pre-processing-pipeline}
+```{python, make-pre-processing-pipeline}
 log_transformer = FunctionTransformer(np.log, 
   inverse_func=np.exp, 
   feature_names_out = "one-to-one")
@@ -196,7 +199,7 @@ preprocessing = ColumnTransformer([
 ])
 ```
 
-```{r make-train-val-sets}
+```{r, make-train-val-sets}
 # using a leave-one-out method for train/validate
 train1 <- training %>% 
   filter(feature != 'Grand Lake')
@@ -263,7 +266,7 @@ val4_ts = r.val4_ts
 
 #### Format LOO dataset for algo dev
 
-```{python labels-features}
+```{python, labels-features}
 # # grab the values we want to predict
 # labels_1 = np.array(train1['value'])
 # labels_2 = np.array(train2['value'])
@@ -363,7 +366,7 @@ train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
 
 #### And for ts chunks
 
-```{python timeseries-test-val}
+```{python, timeseries-test-val}
 #| echo: false
 # 
 # # grab the values we want to predict
@@ -412,7 +415,7 @@ train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
 
 ```
 
-```{python, preproc-loo}
+```{python, preproc-ts}
 #| echo: false
 train1_ts_df, val1_ts_df, test_df_ts_1 = preproc(train1_ts, val1_ts, test)
 train2_ts_df, val2_ts_df, test_df_ts_2 = preproc(train2_ts, val2_ts, test)
@@ -422,7 +425,7 @@ train4_ts_df, val4_ts_df, test_df_ts_4 = preproc(train4_ts, val4_ts, test)
 
 ## Make a baseline dataset
 
-```{r baseline}
+```{r, baseline}
 baseline_by_date <- full_dataset %>% 
   group_by(day_of_year) %>% 
   summarize(mean_temp_by_date_deg_C = mean(value),
@@ -435,7 +438,7 @@ baseline_by_date <- full_dataset %>%
 
 ### Calculate baseline error
 
-```{python, baseline}
+```{python, baseline-error}
 #| echo: false
 baseline_day = r.baseline_by_date
 mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
@@ -447,7 +450,8 @@ baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 
 ## Make NN architecture
 
-```{python build-compile-model}
+```{python, build-compile-model}
+#| echo: false
 def build_model(x_train, y_train, settings):
   # create input layer
   input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
@@ -496,7 +500,7 @@ def compile_model(model, settings):
   return model
 ```
 
-```{python hyperparm-settings -train}
+```{python, hyperparm-settings-train}
 settings = {
     "hiddens": [3, 3],
     "activations": ["relu", "relu"],
@@ -631,20 +635,123 @@ history_6 = model_6.fit(
 )
 ```
 
-```{python}
+```{python, train-1}
 fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
-axs[0].plot(history.history["loss"], label="training")
-axs[0].plot(history.history["val_loss"], label="validation")
+axs[0].plot(history_1.history["loss"], label="training")
+axs[0].plot(history_1.history["val_loss"], label="validation")
 axs[0].set_xlabel("Epoch")
 axs[0].set_ylabel("Loss")
 axs[0].legend()
 
-axs[1].plot(history.history["loss"], label="training")
-axs[1].plot(history.history["val_loss"], label="validation")
+axs[1].plot(history_1.history["loss"], label="training")
+axs[1].plot(history_1.history["val_loss"], label="validation")
 axs[1].set_xlabel("Epoch")
 axs[1].set_ylabel("Mean Squared Error")
 axs[1].legend()
+
+fig.suptitle("LOO dataset 1")
+
+fig.show()
+```
+
+
+```{python, train-2}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_2.history["loss"], label="training")
+axs[0].plot(history_2.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_2.history["loss"], label="training")
+axs[1].plot(history_2.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.suptitle("LOO dataset 2")
+
+fig.show()
+```
+
+```{python, train-3}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_3.history["loss"], label="training")
+axs[0].plot(history_3.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_3.history["loss"], label="training")
+axs[1].plot(history_3.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.suptitle("LOO dataset 3")
+
+fig.show()
+```
+
+```{python, train-4}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_4.history["loss"], label="training")
+axs[0].plot(history_4.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_4.history["loss"], label="training")
+axs[1].plot(history_4.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.suptitle("LOO dataset 4")
+
+fig.show()
+```
+
+```{python, train-5}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_5.history["loss"], label="training")
+axs[0].plot(history_5.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_5.history["loss"], label="training")
+axs[1].plot(history_5.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.suptitle("LOO dataset 5")
+
+fig.show()
+```
+
+```{python, train-6}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history_6.history["loss"], label="training")
+axs[0].plot(history_6.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history_6.history["loss"], label="training")
+axs[1].plot(history_6.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.suptitle("LOO dataset 6")
 
 fig.show()
 ```
