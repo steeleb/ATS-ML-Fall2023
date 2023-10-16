@@ -361,19 +361,20 @@ def compile_model(model, settings):
       loss=tf.keras.losses.MeanSquaredError()
   )
   return model
+
 ```
 
 ```{python hyperparm-settings-train}
 #| echo: false
 settings = {
-    "hiddens": [3, 3],
-    "activations": ["relu", "relu"],
-    "learning_rate": 0.001,
+    "hiddens": [10, 7, 3],
+    "activations": ["relu", "relu", "relu"],
+    "learning_rate": 0.01,
     "random_seed": 57,
     "max_epochs": 1000,
     "batch_size": 32,
     "patience": 10,
-    "dropout_rate": 0,
+    "dropout_rate": 0.2,
 }
 
 tf.keras.backend.clear_session()
