@@ -113,7 +113,16 @@ Test data will be from 2021 forward (2y of data)
 
 ```{r test-r}
 test <- full_dataset %>% 
-  filter(date >= ymd('2021-01-01')) %>% 
+  filter(date >= ymd('2021-01-01')) 
+```
+
+```{r training_set}
+#full training set
+training <- anti_join(full_dataset, test) %>% 
+  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
+                ~ . + 0.0001))
+
+test <- test %>% 
   mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
                 ~ . + 0.0001))
 ```
@@ -124,18 +133,12 @@ test = r.test
 test_labels = np.array(test['value'])
 test_features = (test
   .drop(['value', 'feature', 'date'], axis = 1))
+
 ```
 
 ### make a few iterations of train-val
 
 One will be leave-one-out by lake, the other splitting by timeseries in \~10y increments
-
-```{r training_set}
-#full training set
-training <- anti_join(full_dataset, test) %>% 
-  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
-                ~ . + 0.0001))
-```
 
 ### Look at the training data
 
@@ -261,68 +264,68 @@ val4_ts = r.val4_ts
 #### Format LOO dataset for algo dev
 
 ```{python labels-features}
-# grab the values we want to predict
-labels_1 = np.array(train1['value'])
-labels_2 = np.array(train2['value'])
-labels_3 = np.array(train3['value'])
-labels_4 = np.array(train4['value'])
-labels_5 = np.array(train5['value'])
-labels_6 = np.array(train6['value'])
-
-# grab the values we want to predict
-val_labels_1 = np.array(val1['value'])
-val_labels_2 = np.array(val2['value'])
-val_labels_3 = np.array(val3['value'])
-val_labels_4 = np.array(val4['value'])
-val_labels_5 = np.array(val5['value'])
-val_labels_6 = np.array(val6['value'])
-
-# and remove the labels from the dataset containing the feature set
-features1 = (r.train1
-  .drop(['value', 'feature', 'date'], axis = 1))
-features2 = (r.train2
-  .drop(['value', 'feature', 'date'], axis = 1))
-features3 = (r.train3
-  .drop(['value', 'feature', 'date'], axis = 1))
-features4 = (r.train4
-  .drop(['value', 'feature', 'date'], axis = 1))
-features5 = (r.train5
-  .drop(['value', 'feature', 'date'], axis = 1))
-features6 = (r.train6
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# and remove the labels from the dataset containing the feature set
-val_features1 = (r.val1
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features2 = (r.val2
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features3 = (r.val3
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features4 = (r.val4
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features5 = (r.val5
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features6 = (r.val6
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# Saving feature names for later use
-feature_list = list(features1.columns)
-
-# Convert to numpy array
-features1 = np.array(features1)
-features2 = np.array(features2)
-features3 = np.array(features3)
-features4 = np.array(features4)
-features5 = np.array(features5)
-features6 = np.array(features6)
-
-# Convert to numpy array
-val_features1 = np.array(val_features1)
-val_features2 = np.array(val_features2)
-val_features3 = np.array(val_features3)
-val_features4 = np.array(val_features4)
-val_features5 = np.array(val_features5)
-val_features6 = np.array(val_features6)
+# # grab the values we want to predict
+# labels_1 = np.array(train1['value'])
+# labels_2 = np.array(train2['value'])
+# labels_3 = np.array(train3['value'])
+# labels_4 = np.array(train4['value'])
+# labels_5 = np.array(train5['value'])
+# labels_6 = np.array(train6['value'])
+# 
+# # grab the values we want to predict
+# val_labels_1 = np.array(val1['value'])
+# val_labels_2 = np.array(val2['value'])
+# val_labels_3 = np.array(val3['value'])
+# val_labels_4 = np.array(val4['value'])
+# val_labels_5 = np.array(val5['value'])
+# val_labels_6 = np.array(val6['value'])
+# 
+# # and remove the labels from the dataset containing the feature set
+# features1 = (r.train1
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features2 = (r.train2
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features3 = (r.train3
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features4 = (r.train4
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features5 = (r.train5
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features6 = (r.train6
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# 
+# # and remove the labels from the dataset containing the feature set
+# val_features1 = (r.val1
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features2 = (r.val2
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features3 = (r.val3
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features4 = (r.val4
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features5 = (r.val5
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features6 = (r.val6
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# 
+# # Saving feature names for later use
+# feature_list = list(features1.columns)
+# 
+# # Convert to numpy array
+# features1 = np.array(features1)
+# features2 = np.array(features2)
+# features3 = np.array(features3)
+# features4 = np.array(features4)
+# features5 = np.array(features5)
+# features6 = np.array(features6)
+# 
+# # Convert to numpy array
+# val_features1 = np.array(val_features1)
+# val_features2 = np.array(val_features2)
+# val_features3 = np.array(val_features3)
+# val_features4 = np.array(val_features4)
+# val_features5 = np.array(val_features5)
+# val_features6 = np.array(val_features6)
 
 ```
 
@@ -330,9 +333,9 @@ val_features6 = np.array(val_features6)
 #| echo: false
 def preproc(train, val, test):
   pp = preprocessing.fit(train)
-  train_pp = pp.transform(train)
-  test_pp = pp.transform(test)
-  val_pp = pp.transform(val)
+  train_pp = pp.fit_transform(train)
+  test_pp = pp.fit_transform(test)
+  val_pp = pp.fit_transform(val)
   train_df = pd.DataFrame(
     train_pp,
     columns = pp.get_feature_names_out(),
@@ -362,50 +365,50 @@ train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
 
 ```{python timeseries-test-val}
 #| echo: false
-
-# grab the values we want to predict
-labels_1_ts = np.array(train1_ts['value'])
-labels_2_ts = np.array(train2_ts['value'])
-labels_3_ts = np.array(train3_ts['value'])
-labels_4_ts = np.array(train4_ts['value'])
-
-# grab the values we want to predict
-val_labels_1_ts = np.array(val1_ts['value'])
-val_labels_2_ts = np.array(val2_ts['value'])
-val_labels_3_ts = np.array(val3_ts['value'])
-val_labels_4_ts = np.array(val4_ts['value'])
-
-# and remove the labels from the dataset containing the feature set
-features1_ts = (train1_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-features2_ts = (train2_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-features3_ts = (train3_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-features4_ts = (train4_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# and remove the labels from the dataset containing the feature set
-val_features1_ts = (val1_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features2_ts = (val2_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features3_ts = (val3_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-val_features4_ts = (val4_ts
-  .drop(['value', 'feature', 'date'], axis = 1))
-
-# Convert to numpy array
-features1_ts = np.array(features1_ts)
-features2_ts = np.array(features2_ts)
-features3_ts = np.array(features3_ts)
-features4_ts = np.array(features4_ts)
-
-# Convert to numpy array
-val_features1_ts = np.array(val_features1_ts)
-val_features2_ts = np.array(val_features2_ts)
-val_features3_ts = np.array(val_features3_ts)
-val_features4_ts = np.array(val_features4_ts)
+# 
+# # grab the values we want to predict
+# labels_1_ts = np.array(train1_ts['value'])
+# labels_2_ts = np.array(train2_ts['value'])
+# labels_3_ts = np.array(train3_ts['value'])
+# labels_4_ts = np.array(train4_ts['value'])
+# 
+# # grab the values we want to predict
+# val_labels_1_ts = np.array(val1_ts['value'])
+# val_labels_2_ts = np.array(val2_ts['value'])
+# val_labels_3_ts = np.array(val3_ts['value'])
+# val_labels_4_ts = np.array(val4_ts['value'])
+# 
+# # and remove the labels from the dataset containing the feature set
+# features1_ts = (train1_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features2_ts = (train2_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features3_ts = (train3_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# features4_ts = (train4_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# 
+# # and remove the labels from the dataset containing the feature set
+# val_features1_ts = (val1_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features2_ts = (val2_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features3_ts = (val3_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# val_features4_ts = (val4_ts
+#   .drop(['value', 'feature', 'date'], axis = 1))
+# 
+# # Convert to numpy array
+# features1_ts = np.array(features1_ts)
+# features2_ts = np.array(features2_ts)
+# features3_ts = np.array(features3_ts)
+# features4_ts = np.array(features4_ts)
+# 
+# # Convert to numpy array
+# val_features1_ts = np.array(val_features1_ts)
+# val_features2_ts = np.array(val_features2_ts)
+# val_features3_ts = np.array(val_features3_ts)
+# val_features4_ts = np.array(val_features4_ts)
 
 ```
 
@@ -446,49 +449,51 @@ baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 
 ```{python build-compile-model}
 def build_model(x_train, y_train, settings):
-    # create input layer
-    input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
-
-    # create hidden layers each with specific number of nodes
-    assert len(settings["hiddens"]) == len(
-        settings["activations"]
-    ), "hiddens and activations settings must be the same length."
-
-    # add dropout layer
-    layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(layers)
-
-    for hidden, activation in zip(settings["hiddens"], settings["activations"]):
-        layers = tf.keras.layers.Dense(
-            units=hidden,
-            activation=activation,
-            use_bias=True,
-            kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
-            bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-            kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-        )(layers)
-
-    # create output layer
-    output_layer = tf.keras.layers.Dense(
-        units=y_train.shape[-1],
-        activation="softmax",
-        use_bias=True,
-        bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
-        kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
-    )(layers)
-
-    # construct the model
-    model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
-    model.summary()
-
-    return model
+  # create input layer
+  input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
+  
+  # # create hidden layers each with specific number of nodes
+  # assert len(settings["hiddens"]) == len(
+  #   settings["activations"]
+  # ), "hiddens and activations settings must be the same length."
+  
+  # add dropout layer
+  layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(input_layer)
+  
+  for hidden, activation in zip(settings["hiddens"], settings["activations"]):
+    layers = tf.keras.layers.Dense(
+      units=hidden,
+      activation=activation,
+      use_bias=True,
+      kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
+      bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+      kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
+      )(layers)
+  
+  # create output layer
+  output_layer = tf.keras.layers.Dense(
+    units=1,
+    activation="linear",
+    use_bias=True,
+    bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
+    kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
+  )(layers)
+  
+  # construct the model
+  model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+  model.summary()
+  
+  return model
 
 
 def compile_model(model, settings):
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=settings["learning_rate"]),
-        loss=tf.keras.losses.MAPE()
-    )
-    return model
+  model.compile(
+      optimizer=tf.keras.optimizers.Adam(
+        learning_rate=settings["learning_rate"],
+        ),
+      loss=tf.keras.losses.MeanSquaredError()
+  )
+  return model
 ```
 
 ```{python hyperparm-settings -train}
@@ -500,13 +505,146 @@ settings = {
     "max_epochs": 1000,
     "batch_size": 32,
     "patience": 10,
-    "dropout_rate": 0,
+    "dropout_rate": 0.25,
 }
 
 tf.keras.backend.clear_session()
 tf.keras.utils.set_random_seed(settings["random_seed"])
 
+# define the early stopping callback
+early_stopping_callback = tf.keras.callbacks.EarlyStopping(
+  monitor="val_loss", 
+  patience=settings["patience"], 
+  restore_best_weights=True, 
+  mode="auto"
+)
 
-model = build_model(Xtrain, Ttrain, settings)
-model = compile_model(model, settings)
+```
+
+```{python}
+model_1 = build_model(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  settings)
+model_1 = compile_model(model_1, settings)
+
+# train the model via model.fit
+history_1 = model_1.fit(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val1_df.drop('std__value', axis = 1), val1_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_2 = build_model(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  settings)
+model_2 = compile_model(model_2, settings)
+
+# train the model via model.fit
+history_2 = model_2.fit(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val2_df.drop('std__value', axis = 1), val2_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_3 = build_model(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  settings)
+model_3 = compile_model(model_3, settings)
+
+# train the model via model.fit
+history_3 = model_3.fit(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val3_df.drop('std__value', axis = 1), val3_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_4 = build_model(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  settings)
+model_4 = compile_model(model_4, settings)
+
+# train the model via model.fit
+history_4 = model_4.fit(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val4_df.drop('std__value', axis = 1), val4_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_5 = build_model(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  settings)
+model_5 = compile_model(model_5, settings)
+
+# train the model via model.fit
+history_5 = model_5.fit(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val5_df.drop('std__value', axis = 1), val5_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_6 = build_model(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  settings)
+model_6 = compile_model(model_6, settings)
+
+# train the model via model.fit
+history_6 = model_6.fit(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val6_df.drop('std__value', axis = 1), val6_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+```
+
+```{python}
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+axs[0].plot(history.history["loss"], label="training")
+axs[0].plot(history.history["val_loss"], label="validation")
+axs[0].set_xlabel("Epoch")
+axs[0].set_ylabel("Loss")
+axs[0].legend()
+
+axs[1].plot(history.history["loss"], label="training")
+axs[1].plot(history.history["val_loss"], label="validation")
+axs[1].set_xlabel("Epoch")
+axs[1].set_ylabel("Mean Squared Error")
+axs[1].legend()
+
+fig.show()
 ```
