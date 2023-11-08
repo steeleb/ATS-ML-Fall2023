@@ -64,7 +64,8 @@ surf_temp <- NW_temp %>%
   arrange(depth) %>% 
   slice(1) %>% 
   filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
-                        'SM-DAM', 'WC-DAM', 'WG-DAM'))
+                        'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
+  filter(date < ymd("2023-01-01"))
   
 NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
   rename(feature = GNIS_Name) %>% 
@@ -79,7 +80,7 @@ NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-
 all_NW_temp <- full_join(surf_temp, NW_estimates)
 
 # weather data
-weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-05-25.csv') %>% 
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-11-08.csv') %>% 
   rename(feature = lake) %>% 
   pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
                         'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
@@ -91,12 +92,20 @@ weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregate
   mutate(feature = if_else(feature == 'Lake Granby',
                            'Granby Reservoir',
                            feature))
+
+# and cumulative sum weather
+met_cumulative_sum <- read_csv("~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_cumulative_sums_annual_1984-01-01_2023-05-17v2023-11-08.csv") %>%
+  rename(feature = lake) %>% 
+  mutate(feature = if_else(feature == 'Lake Granby',
+                           'Granby Reservoir',
+                           feature))
+
 # static
 static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
 
 # join together for full dataset
 full_dataset = left_join(static, all_NW_temp) %>% 
-  left_join(., weather) %>% 
+  left_join(., met_cumulative_sum) %>% 
   filter(between(month, 4, 10)) %>% 
   select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
             station, Latitude, Longitude, lakeID, HarmonizedName, 

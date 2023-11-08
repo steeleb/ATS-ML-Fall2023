@@ -1,0 +1,105 @@
+---
+title: "Estimation of Daily Water Temperature using Dense Neural Networks"
+author: "B Steele"
+date: today
+date-format: long
+format: pdf
+editor: 
+  visual:
+    theme: sky
+---
+
+```{r, env-set-up}
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+
+# file paths
+is_dir = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+rs_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/'
+```
+
+## Read in temp data and make train-val-test
+
+```{r, raw_data}
+# read in temp data
+NW_temp <- read_csv(file.path(is_dir, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
+surf_temp <- NW_temp %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1) %>% 
+  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
+                        'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
+  filter(date < ymd("2023-01-01"))
+  
+NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = adj_medTemp,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature),
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
+
+all_NW_temp <- full_join(surf_temp, NW_estimates)
+
+# weather data
+weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-11-08.csv') %>% 
+  rename(feature = lake) %>% 
+  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
+                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
+                        'mean_wind_mps', 'max_wind_mps'),
+               names_to = 'variable') %>% 
+  pivot_wider(names_from = c('variable', 'n_prev_days'),
+              names_sep = '_',
+              values_from = 'value') %>% 
+  mutate(feature = if_else(feature == 'Lake Granby',
+                           'Granby Reservoir',
+                           feature))
+
+# and cumulative sum weather
+met_cumulative_sum <- read_csv("~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_cumulative_sums_annual_1984-01-01_2023-05-17v2023-11-08.csv") %>%
+  rename(feature = lake) %>% 
+  mutate(feature = if_else(feature == 'Lake Granby',
+                           'Granby Reservoir',
+                           feature))
+
+# static
+static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
+
+# join together for full dataset
+full_dataset = left_join(static, all_NW_temp) %>%
+  left_join(., met_cumulative_sum) %>%
+  left_join(., weather) %>%
+  filter(between(month, 4, 10)) %>%
+  select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
+            station, Latitude, Longitude, lakeID, HarmonizedName,
+            location_type, mission)) %>%
+  arrange(date) %>%
+  filter(complete.cases(.))
+
+# drop windy gap for incomplete
+full_dataset <- full_dataset %>%
+  filter(feature != 'Windy Gap Reservoir') %>%
+  mutate(day_of_year = yday(date))
+
+```
+## Make train-val-test sets
+
+Test data will be from 2021 forward (2y of data)
+
+```{r, test-r}
+test <- full_dataset %>% 
+  filter(date >= ymd('2021-01-01'))
+
+write_csv(test, file.path(nn_dir, paste0('test_set_2021_forward_v', Sys.Date(), '.csv')))
+```
+
+```{r, training_set}
+#full training set
+training <- anti_join(full_dataset, test)
+
+write_csv(training, file.path(nn_dir, paste0('training_set_up_to_2021_v', Sys.Date(), '.csv')))
+```
