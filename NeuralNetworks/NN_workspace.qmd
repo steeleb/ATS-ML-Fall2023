@@ -15,8 +15,7 @@ library(reticulate)
 library(kableExtra)
 
 # file paths
-is_data = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
-rs_data = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/'
 
 # activate conda env
 use_condaenv('~/miniconda3/envs/env_ATSML/')
@@ -25,26 +24,29 @@ use_condaenv('~/miniconda3/envs/env_ATSML/')
 
 ```{python, import-modules}
 #| echo: false
+
+#high level modules
 import sys
+import imp
 import numpy as np
 import seaborn as sb
-
 import pandas as pd
 import datetime
+import pickle
+
+# ml/ai modules
 import tensorflow as tf
 # Let's import some different things we will use to build the neural network
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, Input, Dropout, Softmax
 
-import sklearn
-from sklearn.preprocessing import FunctionTransformer
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.compose import ColumnTransformer
-
-# import pydot
+# import plt
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+
+# import custom modules
+imp.load_source("settings","NeuralNetworks/settings.py")
+from settings import settings
 
 print(f"python version = {sys.version}")
 print(f"numpy version = {np.__version__}")
@@ -53,104 +55,6 @@ print(f"tensorflow version = {tf.__version__}")
 # set random state
 rs = 37
 ```
-
-## Read in temp data and make train-val-test
-
-```{r, raw_data}
-# read in temp data
-NW_temp <- read_csv(file.path(is_data, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv'))
-surf_temp <- NW_temp %>% 
-  group_by(date, feature) %>% 
-  arrange(depth) %>% 
-  slice(1) %>% 
-  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
-                        'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
-  filter(date < ymd("2023-01-01"))
-  
-NW_estimates <- read_csv(file.path(rs_data, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
-  rename(feature = GNIS_Name) %>% 
-  mutate(value = adj_medTemp,
-         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
-                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
-                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
-                             TRUE ~ feature),
-         station = 'sat') %>% 
-  filter(location_type == 'poi_center')
-
-all_NW_temp <- full_join(surf_temp, NW_estimates)
-
-# weather data
-weather <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-11-08.csv') %>% 
-  rename(feature = lake) %>% 
-  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
-                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
-                        'mean_wind_mps', 'max_wind_mps'),
-               names_to = 'variable') %>% 
-  pivot_wider(names_from = c('variable', 'n_prev_days'),
-              names_sep = '_',
-              values_from = 'value') %>% 
-  mutate(feature = if_else(feature == 'Lake Granby',
-                           'Granby Reservoir',
-                           feature))
-
-# and cumulative sum weather
-met_cumulative_sum <- read_csv("~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/NW_NLDAS_climate_cumulative_sums_annual_1984-01-01_2023-05-17v2023-11-08.csv") %>%
-  rename(feature = lake) %>% 
-  mutate(feature = if_else(feature == 'Lake Granby',
-                           'Granby Reservoir',
-                           feature))
-
-# static
-static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static_vars_7_lakes.csv')
-
-# join together for full dataset
-full_dataset = left_join(static, all_NW_temp) %>% 
-  left_join(., met_cumulative_sum) %>% 
-  filter(between(month, 4, 10)) %>% 
-  select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
-            station, Latitude, Longitude, lakeID, HarmonizedName, 
-            location_type, mission)) %>% 
-  arrange(date) %>% 
-  filter(complete.cases(.)) 
-
-# drop windy gap for incomplete
-full_dataset <- full_dataset %>% 
-  filter(feature != 'Windy Gap Reservoir') %>% 
-  mutate(day_of_year = yday(date))
-
-```
-
-## Make train-val-test sets
-
-Test data will be from 2021 forward (2y of data)
-
-```{r, test-r}
-test <- full_dataset %>% 
-  filter(date >= ymd('2021-01-01')) 
-```
-
-```{r, training_set}
-#full training set
-training <- anti_join(full_dataset, test) %>% 
-  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
-                ~ . + 0.0001))
-
-test <- test %>% 
-  mutate(across(c("tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"),
-                ~ . + 0.0001))
-```
-
-```{python, test-py}
-test = r.test
-# grab the values we want to predict
-test_labels = np.array(test['value'])
-test_features = (test
-  .drop(['value', 'feature', 'date'], axis = 1))
-```
-
-### make a few iterations of train-val
-
-One will be leave-one-out by lake, the other splitting by timeseries in \~10y increments
 
 ### Look at the training data
 
@@ -162,6 +66,7 @@ make_histogram <- function(param){
     theme_bw()
 }
 
+training <- read_csv(file.path(nn_dir, "training_set_up_to_2021_v2023-11-08.csv"))
 param_list = names(training)
 param_list = param_list[8:length(param_list)]
 
@@ -172,274 +77,143 @@ Precip data needs log transformation before standardization due to histo frequen
 
 Wind data needs sqrt transormation.
 
-```{python, make-pre-processing-pipeline}
-log_transformer = FunctionTransformer(np.log, 
-  inverse_func=np.exp, 
-  feature_names_out = "one-to-one")
-sqrt_transformer = FunctionTransformer(np.sqrt, 
-  inverse_func=np.square,
-  feature_names_out = "one-to-one")
+These transformations have been made in the _preprocessing.py script.
 
-precip_pipeline = make_pipeline(
-  log_transformer,
-  StandardScaler()
-)
+## Train/Val sets
 
-wind_pipeline = make_pipeline(
-  sqrt_transformer,
-  StandardScaler()
-)
+Read in the train/val datasets that were saved as pickle files in _preprocessing.py
 
-precip_vars = ["tot_precip_mm_1", "tot_precip_mm_3", "tot_precip_mm_5"]
+```{python, load-train-val}
 
-wind_vars = ["min_wind_mps_1", "mean_wind_mps_1", "max_wind_mps_1",
-  "min_wind_mps_3", "mean_wind_mps_3", "max_wind_mps_3",
-  "min_wind_mps_5", "mean_wind_mps_5", "max_wind_mps_5"]
-
-std_vars = ["value", "day_of_year",
-  "max_temp_degC_1", "mean_temp_degC_1", "min_temp_degC_1", "tot_sol_rad_Wpm2_1",
-  "max_temp_degC_3", "mean_temp_degC_3", "min_temp_degC_3", "tot_sol_rad_Wpm2_3", 
-  "max_temp_degC_5", "mean_temp_degC_5", "min_temp_degC_5", "tot_sol_rad_Wpm2_5"]
-
-preprocessing = ColumnTransformer([
-  ("precip", precip_pipeline, precip_vars),
-  ("wind", wind_pipeline, wind_vars),
-  ("std", StandardScaler(), std_vars)
-])
 ```
 
-```{r, make-train-val-sets}
-# using a leave-one-out method for train/validate
-train1 <- training %>% 
-  filter(feature != 'Grand Lake')
-val1 = anti_join(training, train1)
-train2 <- training %>% 
-  filter(feature != 'Horsetooth Reservoir')
-val2 = anti_join(training, train2)
-train3 <- training %>% 
-  filter(feature != 'Shadow Mountain Reservoir')
-val3 = anti_join(training, train3)
-train4 <- training %>% 
-  filter(feature != 'Granby Reservoir')
-val4 = anti_join(training, train4)
-train5 <- training %>% 
-  filter(feature != 'Carter Lake')
-val5 = anti_join(training, train5)
-train6 <- training %>% 
-  filter(feature != 'Willow Creek Reservoir')
-val6 = anti_join(training, train6)
-
-# using time blocks
-train1_ts <- training %>% 
-  filter(!between(date, ymd('1984-01-01'), ymd('1995-01-01')))
-val1_ts = anti_join(training, train1_ts)
-train2_ts <- training %>% 
-  filter(!between(date, ymd('1995-01-01'), ymd('2005-01-01')))
-val2_ts = anti_join(training, train2_ts)
-train3_ts <- training %>% 
-  filter(!between(date, ymd('2005-01-01'), ymd('2015-01-01')))
-val3_ts = anti_join(training, train3_ts)
-train4_ts <- training %>% 
-  filter(!between(date, ymd('2015-01-01'), ymd('2021-01-01')))
-val4_ts = anti_join(training, train4_ts)
-```
-
-### Bring data over to py and apply preprocessing pipeline
-
-```{python, train-val-to-py}
-#| echo: false
-#bring data over from R
-train1 = r.train1
-train2 = r.train2
-train3 = r.train3
-train4 = r.train4
-train5 = r.train5
-train6 = r.train6
-val1 = r.val1
-val2 = r.val2
-val3 = r.val3
-val4 = r.val4
-val5 = r.val5
-val6 = r.val6
-
-train1_ts = r.train1_ts
-train2_ts = r.train2_ts
-train3_ts = r.train3_ts
-train4_ts = r.train4_ts
-
-val1_ts = r.val1_ts
-val2_ts = r.val2_ts
-val3_ts = r.val3_ts
-val4_ts = r.val4_ts
-```
-
-#### Format LOO dataset for algo dev
+### Format LOO dataset for algo dev
 
 ```{python, labels-features}
-# # grab the values we want to predict
-# labels_1 = np.array(train1['value'])
-# labels_2 = np.array(train2['value'])
-# labels_3 = np.array(train3['value'])
-# labels_4 = np.array(train4['value'])
-# labels_5 = np.array(train5['value'])
-# labels_6 = np.array(train6['value'])
-# 
-# # grab the values we want to predict
-# val_labels_1 = np.array(val1['value'])
-# val_labels_2 = np.array(val2['value'])
-# val_labels_3 = np.array(val3['value'])
-# val_labels_4 = np.array(val4['value'])
-# val_labels_5 = np.array(val5['value'])
-# val_labels_6 = np.array(val6['value'])
-# 
-# # and remove the labels from the dataset containing the feature set
-# features1 = (r.train1
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features2 = (r.train2
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features3 = (r.train3
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features4 = (r.train4
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features5 = (r.train5
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features6 = (r.train6
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# 
-# # and remove the labels from the dataset containing the feature set
-# val_features1 = (r.val1
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features2 = (r.val2
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features3 = (r.val3
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features4 = (r.val4
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features5 = (r.val5
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features6 = (r.val6
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# 
-# # Saving feature names for later use
-# feature_list = list(features1.columns)
-# 
-# # Convert to numpy array
-# features1 = np.array(features1)
-# features2 = np.array(features2)
-# features3 = np.array(features3)
-# features4 = np.array(features4)
-# features5 = np.array(features5)
-# features6 = np.array(features6)
-# 
-# # Convert to numpy array
-# val_features1 = np.array(val_features1)
-# val_features2 = np.array(val_features2)
-# val_features3 = np.array(val_features3)
-# val_features4 = np.array(val_features4)
-# val_features5 = np.array(val_features5)
-# val_features6 = np.array(val_features6)
+# grab the values we want to predict
+labels_1 = np.array(train1['value'])
+labels_2 = np.array(train2['value'])
+labels_3 = np.array(train3['value'])
+labels_4 = np.array(train4['value'])
+labels_5 = np.array(train5['value'])
+labels_6 = np.array(train6['value'])
 
-```
+# grab the values we want to predict
+val_labels_1 = np.array(val1['value'])
+val_labels_2 = np.array(val2['value'])
+val_labels_3 = np.array(val3['value'])
+val_labels_4 = np.array(val4['value'])
+val_labels_5 = np.array(val5['value'])
+val_labels_6 = np.array(val6['value'])
 
-```{python, preproc-loo}
-#| echo: false
-def preproc(train, val, test):
-  pp = preprocessing.fit(train)
-  train_pp = pp.fit_transform(train)
-  test_pp = pp.fit_transform(test)
-  val_pp = pp.fit_transform(val)
-  train_df = pd.DataFrame(
-    train_pp,
-    columns = pp.get_feature_names_out(),
-    index = train.index
-  )
-  val_df = pd.DataFrame(
-    val_pp,
-    columns = pp.get_feature_names_out(),
-    index = val.index
-  )
-  test_df = pd.DataFrame(
-    test_pp,
-    columns = pp.get_feature_names_out(),
-    index = test.index
-  )
-  return train_df, val_df, test_df
+# and remove the labels from the dataset containing the feature set
+features1 = (train1
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2 = (train2
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3 = (train3
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4 = (train4
+  .drop(['value', 'feature', 'date'], axis = 1))
+features5 = (train5
+  .drop(['value', 'feature', 'date'], axis = 1))
+features6 = (train6
+  .drop(['value', 'feature', 'date'], axis = 1))
 
-train1_df, val1_df, test_df_1 = preproc(train1, val1, test)
-train2_df, val2_df, test_df_2 = preproc(train2, val2, test)
-train3_df, val3_df, test_df_3 = preproc(train3, val3, test)
-train4_df, val4_df, test_df_4 = preproc(train4, val4, test)
-train5_df, val5_df, test_df_5 = preproc(train5, val5, test)
-train6_df, val6_df, test_df_6 = preproc(train6, val6, test)
+# and remove the labels from the dataset containing the feature set
+val_features1 = (val1
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2 = (val2
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3 = (val3
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4 = (val4
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features5 = (val5
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features6 = (val6
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# Saving feature names for later use
+feature_list = list(features1.columns)
+
+# Convert to numpy array
+features1 = np.array(features1)
+features2 = np.array(features2)
+features3 = np.array(features3)
+features4 = np.array(features4)
+features5 = np.array(features5)
+features6 = np.array(features6)
+
+# Convert to numpy array
+val_features1 = np.array(val_features1)
+val_features2 = np.array(val_features2)
+val_features3 = np.array(val_features3)
+val_features4 = np.array(val_features4)
+val_features5 = np.array(val_features5)
+val_features6 = np.array(val_features6)
+
 ```
 
 #### And for ts chunks
 
 ```{python, timeseries-test-val}
 #| echo: false
-# 
-# # grab the values we want to predict
-# labels_1_ts = np.array(train1_ts['value'])
-# labels_2_ts = np.array(train2_ts['value'])
-# labels_3_ts = np.array(train3_ts['value'])
-# labels_4_ts = np.array(train4_ts['value'])
-# 
-# # grab the values we want to predict
-# val_labels_1_ts = np.array(val1_ts['value'])
-# val_labels_2_ts = np.array(val2_ts['value'])
-# val_labels_3_ts = np.array(val3_ts['value'])
-# val_labels_4_ts = np.array(val4_ts['value'])
-# 
-# # and remove the labels from the dataset containing the feature set
-# features1_ts = (train1_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features2_ts = (train2_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features3_ts = (train3_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# features4_ts = (train4_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# 
-# # and remove the labels from the dataset containing the feature set
-# val_features1_ts = (val1_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features2_ts = (val2_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features3_ts = (val3_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# val_features4_ts = (val4_ts
-#   .drop(['value', 'feature', 'date'], axis = 1))
-# 
-# # Convert to numpy array
-# features1_ts = np.array(features1_ts)
-# features2_ts = np.array(features2_ts)
-# features3_ts = np.array(features3_ts)
-# features4_ts = np.array(features4_ts)
-# 
-# # Convert to numpy array
-# val_features1_ts = np.array(val_features1_ts)
-# val_features2_ts = np.array(val_features2_ts)
-# val_features3_ts = np.array(val_features3_ts)
-# val_features4_ts = np.array(val_features4_ts)
 
-```
+# grab the values we want to predict
+labels_1_ts = np.array(train1_ts['value'])
+labels_2_ts = np.array(train2_ts['value'])
+labels_3_ts = np.array(train3_ts['value'])
+labels_4_ts = np.array(train4_ts['value'])
 
-```{python, preproc-ts}
-#| echo: false
-train1_ts_df, val1_ts_df, test_df_ts_1 = preproc(train1_ts, val1_ts, test)
-train2_ts_df, val2_ts_df, test_df_ts_2 = preproc(train2_ts, val2_ts, test)
-train3_ts_df, val3_ts_df, test_df_ts_3 = preproc(train3_ts, val3_ts, test)
-train4_ts_df, val4_ts_df, test_df_ts_4 = preproc(train4_ts, val4_ts, test)
+# grab the values we want to predict
+val_labels_1_ts = np.array(val1_ts['value'])
+val_labels_2_ts = np.array(val2_ts['value'])
+val_labels_3_ts = np.array(val3_ts['value'])
+val_labels_4_ts = np.array(val4_ts['value'])
+
+# and remove the labels from the dataset containing the feature set
+features1_ts = (train1_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features2_ts = (train2_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features3_ts = (train3_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+features4_ts = (train4_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# and remove the labels from the dataset containing the feature set
+val_features1_ts = (val1_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features2_ts = (val2_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features3_ts = (val3_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+val_features4_ts = (val4_ts
+  .drop(['value', 'feature', 'date'], axis = 1))
+
+# Convert to numpy array
+features1_ts = np.array(features1_ts)
+features2_ts = np.array(features2_ts)
+features3_ts = np.array(features3_ts)
+features4_ts = np.array(features4_ts)
+
+# Convert to numpy array
+val_features1_ts = np.array(val_features1_ts)
+val_features2_ts = np.array(val_features2_ts)
+val_features3_ts = np.array(val_features3_ts)
+val_features4_ts = np.array(val_features4_ts)
+
 ```
 
 ## Make a baseline dataset
 
 ```{r, baseline}
-baseline_by_date <- full_dataset %>% 
+baseline_by_date <- training %>% 
   group_by(day_of_year) %>% 
   summarize(mean_temp_by_date_deg_C = mean(value),
             n = n()) %>% 
-  left_join(full_dataset, .) %>% 
+  left_join(training, .) %>% 
   #remove days where there are less than or equal to 3 observations contributing to the mean
   filter(n > 3)
 
@@ -451,10 +225,7 @@ baseline_by_date <- full_dataset %>%
 #| echo: false
 baseline_day = r.baseline_by_date
 mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
-baseline_mae_err_text = round(mae_baseline_day_errors, 2)
-
 mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
-baseline_mse_err_text = round(mse_baseline_day_errors, 2)
 ```
 
 ## Make NN architecture
@@ -510,16 +281,6 @@ def compile_model(model, settings):
 ```
 
 ```{python, hyperparm-settings-train}
-settings = {
-    "hiddens": [3, 3],
-    "activations": ["relu", "relu"],
-    "learning_rate": 0.001,
-    "random_seed": 57,
-    "max_epochs": 1000,
-    "batch_size": 32,
-    "patience": 10,
-    "dropout_rate": 0.25,
-}
 
 tf.keras.backend.clear_session()
 tf.keras.utils.set_random_seed(settings["random_seed"])
@@ -536,109 +297,109 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
 
 ```{python}
 model_1 = build_model(
-  train1_df.drop('std__value', axis = 1), 
-  train1_df['std__value'], 
+  train1_df.drop('value', axis = 1), 
+  train1_df['value'], 
   settings)
 model_1 = compile_model(model_1, settings)
 
 # train the model via model.fit
 history_1 = model_1.fit(
-  train1_df.drop('std__value', axis = 1), 
-  train1_df['std__value'], 
+  train1_df.drop('value', axis = 1), 
+  train1_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val1_df.drop('std__value', axis = 1), val1_df['std__value']],
+  validation_data=[val1_df.drop('value', axis = 1), val1_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
 model_2 = build_model(
-  train2_df.drop('std__value', axis = 1), 
-  train2_df['std__value'], 
+  train2_df.drop('value', axis = 1), 
+  train2_df['value'], 
   settings)
 model_2 = compile_model(model_2, settings)
 
 # train the model via model.fit
 history_2 = model_2.fit(
-  train2_df.drop('std__value', axis = 1), 
-  train2_df['std__value'], 
+  train2_df.drop('value', axis = 1), 
+  train2_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val2_df.drop('std__value', axis = 1), val2_df['std__value']],
+  validation_data=[val2_df.drop('value', axis = 1), val2_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
 model_3 = build_model(
-  train3_df.drop('std__value', axis = 1), 
-  train3_df['std__value'], 
+  train3_df.drop('value', axis = 1), 
+  train3_df['value'], 
   settings)
 model_3 = compile_model(model_3, settings)
 
 # train the model via model.fit
 history_3 = model_3.fit(
-  train3_df.drop('std__value', axis = 1), 
-  train3_df['std__value'], 
+  train3_df.drop('value', axis = 1), 
+  train3_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val3_df.drop('std__value', axis = 1), val3_df['std__value']],
+  validation_data=[val3_df.drop('value', axis = 1), val3_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
 model_4 = build_model(
-  train4_df.drop('std__value', axis = 1), 
-  train4_df['std__value'], 
+  train4_df.drop('value', axis = 1), 
+  train4_df['value'], 
   settings)
 model_4 = compile_model(model_4, settings)
 
 # train the model via model.fit
 history_4 = model_4.fit(
-  train4_df.drop('std__value', axis = 1), 
-  train4_df['std__value'], 
+  train4_df.drop('value', axis = 1), 
+  train4_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val4_df.drop('std__value', axis = 1), val4_df['std__value']],
+  validation_data=[val4_df.drop('value', axis = 1), val4_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
 model_5 = build_model(
-  train5_df.drop('std__value', axis = 1), 
-  train5_df['std__value'], 
+  train5_df.drop('value', axis = 1), 
+  train5_df['value'], 
   settings)
 model_5 = compile_model(model_5, settings)
 
 # train the model via model.fit
 history_5 = model_5.fit(
-  train5_df.drop('std__value', axis = 1), 
-  train5_df['std__value'], 
+  train5_df.drop('value', axis = 1), 
+  train5_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val5_df.drop('std__value', axis = 1), val5_df['std__value']],
+  validation_data=[val5_df.drop('value', axis = 1), val5_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
 model_6 = build_model(
-  train6_df.drop('std__value', axis = 1), 
-  train6_df['std__value'], 
+  train6_df.drop('value', axis = 1), 
+  train6_df['value'], 
   settings)
 model_6 = compile_model(model_6, settings)
 
 # train the model via model.fit
 history_6 = model_6.fit(
-  train6_df.drop('std__value', axis = 1), 
-  train6_df['std__value'], 
+  train6_df.drop('value', axis = 1), 
+  train6_df['value'], 
   epochs=settings["max_epochs"],
   batch_size=settings["batch_size"],
   shuffle=True,
-  validation_data=[val6_df.drop('std__value', axis = 1), val6_df['std__value']],
+  validation_data=[val6_df.drop('value', axis = 1), val6_df['value']],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
