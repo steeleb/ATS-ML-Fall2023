@@ -26,6 +26,7 @@ use_condaenv('~/miniconda3/envs/env_ATSML/')
 #| echo: false
 
 #high level modules
+import os
 import sys
 import imp
 import numpy as np
@@ -47,13 +48,15 @@ import matplotlib.patches as patches
 # import custom modules
 imp.load_source("settings","NeuralNetworks/settings.py")
 from settings import settings
+imp.load_source("tvt", "NeuralNetworks/preprocessing.py")
+from tvt import train1, val1, train2, val2, train3, val3, train4, val4, train5, val5, train6, val6
+from tvt import train1_ts, val1_ts, train2_ts, val2_ts, train3_ts, val3_ts, train4_ts, val4_ts
+imp.load_source("architecture", "NeuralNetworks/architecture.py")
+from architecture import build_model, compile_model
 
 print(f"python version = {sys.version}")
 print(f"numpy version = {np.__version__}")
 print(f"tensorflow version = {tf.__version__}")
-
-# set random state
-rs = 37
 ```
 
 ### Look at the training data
@@ -81,15 +84,11 @@ These transformations have been made in the _preprocessing.py script.
 
 ## Train/Val sets
 
-Read in the train/val datasets that were saved as pickle files in _preprocessing.py
-
-```{python, load-train-val}
-
-```
-
 ### Format LOO dataset for algo dev
 
 ```{python, labels-features}
+#| echo: false
+
 # grab the values we want to predict
 labels_1 = np.array(train1['value'])
 labels_2 = np.array(train2['value'])
@@ -216,7 +215,6 @@ baseline_by_date <- training %>%
   left_join(training, .) %>% 
   #remove days where there are less than or equal to 3 observations contributing to the mean
   filter(n > 3)
-
 ```
 
 ### Calculate baseline error
@@ -230,65 +228,15 @@ mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_d
 
 ## Make NN architecture
 
-```{python, build-compile-model}
-#| echo: false
-def build_model(x_train, y_train, settings):
-  # create input layer
-  input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
-  
-  # # create hidden layers each with specific number of nodes
-  # assert len(settings["hiddens"]) == len(
-  #   settings["activations"]
-  # ), "hiddens and activations settings must be the same length."
-  
-  # add dropout layer
-  layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(input_layer)
-  
-  for hidden, activation in zip(settings["hiddens"], settings["activations"]):
-    layers = tf.keras.layers.Dense(
-      units=hidden,
-      activation=activation,
-      use_bias=True,
-      kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
-      bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-      kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-      )(layers)
-  
-  # create output layer
-  output_layer = tf.keras.layers.Dense(
-    units=1,
-    activation="linear",
-    use_bias=True,
-    bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
-    kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
-  )(layers)
-  
-  # construct the model
-  model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
-  model.summary()
-  
-  return model
-
-
-def compile_model(model, settings):
-  model.compile(
-      optimizer=tf.keras.optimizers.Adam(
-        learning_rate=settings["learning_rate"],
-        ),
-      loss=tf.keras.losses.MeanSquaredError()
-  )
-  return model
-```
-
 ```{python, hyperparm-settings-train}
 
 tf.keras.backend.clear_session()
-tf.keras.utils.set_random_seed(settings["random_seed"])
+tf.keras.utils.set_random_seed(settings["basic"]["random_seed"])
 
 # define the early stopping callback
 early_stopping_callback = tf.keras.callbacks.EarlyStopping(
   monitor="val_loss", 
-  patience=settings["patience"], 
+  patience=settings["basic"]["patience"], 
   restore_best_weights=True, 
   mode="auto"
 )
@@ -296,117 +244,130 @@ early_stopping_callback = tf.keras.callbacks.EarlyStopping(
 ```
 
 ```{python}
+## LOO 1
 model_1 = build_model(
-  train1_df.drop('value', axis = 1), 
-  train1_df['value'], 
-  settings)
-model_1 = compile_model(model_1, settings)
+  features1, 
+  labels_1, 
+  settings["basic"])
+
+model_1 = compile_model(
+  model_1, 
+  settings['basic'])
 
 # train the model via model.fit
 history_1 = model_1.fit(
-  train1_df.drop('value', axis = 1), 
-  train1_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features1, 
+  labels_1, 
+  epochs=settings['basic']["max_epochs"],
+  batch_size=settings['basic']["batch_size"],
   shuffle=True,
-  validation_data=[val1_df.drop('value', axis = 1), val1_df['value']],
+  validation_data=[val_features1, val_labels_1],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
+## LOO 2
 model_2 = build_model(
-  train2_df.drop('value', axis = 1), 
-  train2_df['value'], 
-  settings)
-model_2 = compile_model(model_2, settings)
+  features2,
+  labels_2, 
+  settings["basic"])
+model_2 = compile_model(model_2, settings["basic"])
 
 # train the model via model.fit
 history_2 = model_2.fit(
-  train2_df.drop('value', axis = 1), 
-  train2_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features2,
+  labels_2,
+  epochs=settings["basic"]["max_epochs"],
+  batch_size=settings["basic"]["batch_size"],
   shuffle=True,
-  validation_data=[val2_df.drop('value', axis = 1), val2_df['value']],
+  validation_data=[val_features2, val_labels_2],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
+## LOO 3
+
 model_3 = build_model(
-  train3_df.drop('value', axis = 1), 
-  train3_df['value'], 
-  settings)
-model_3 = compile_model(model_3, settings)
+  features3,
+  labels_3,
+  settings["basic"])
+model_3 = compile_model(model_3, settings["basic"])
 
 # train the model via model.fit
 history_3 = model_3.fit(
-  train3_df.drop('value', axis = 1), 
-  train3_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features3,
+  labels_3,
+  epochs=settings["basic"]["max_epochs"],
+  batch_size=settings["basic"]["batch_size"],
   shuffle=True,
-  validation_data=[val3_df.drop('value', axis = 1), val3_df['value']],
+  validation_data=[val_features3, val_labels_3],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
+## LOO 4
+
 model_4 = build_model(
-  train4_df.drop('value', axis = 1), 
-  train4_df['value'], 
-  settings)
-model_4 = compile_model(model_4, settings)
+  features4,
+  labels_4,
+  settings["basic"])
+model_4 = compile_model(model_4, settings["basic"])
 
 # train the model via model.fit
 history_4 = model_4.fit(
-  train4_df.drop('value', axis = 1), 
-  train4_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features4,
+  labels_4,
+  epochs=settings["basic"]["max_epochs"],
+  batch_size=settings["basic"]["batch_size"],
   shuffle=True,
-  validation_data=[val4_df.drop('value', axis = 1), val4_df['value']],
+  validation_data=[val_features4, val_labels_4],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
+## LOO 5
+
 model_5 = build_model(
-  train5_df.drop('value', axis = 1), 
-  train5_df['value'], 
-  settings)
-model_5 = compile_model(model_5, settings)
+  features5,
+  labels_5,
+  settings["basic"])
+model_5 = compile_model(model_5, settings["basic"])
 
 # train the model via model.fit
 history_5 = model_5.fit(
-  train5_df.drop('value', axis = 1), 
-  train5_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features5,
+  labels_5,
+  epochs=settings["basic"]["max_epochs"],
+  batch_size=settings["basic"]["batch_size"],
   shuffle=True,
-  validation_data=[val5_df.drop('value', axis = 1), val5_df['value']],
+  validation_data=[val_features5, val_labels_5],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 
+## LOO 6
+
 model_6 = build_model(
-  train6_df.drop('value', axis = 1), 
-  train6_df['value'], 
-  settings)
-model_6 = compile_model(model_6, settings)
+  features6,
+  labels_6,
+  settings["basic"])
+model_6 = compile_model(model_6, settings["basic"])
 
 # train the model via model.fit
 history_6 = model_6.fit(
-  train6_df.drop('value', axis = 1), 
-  train6_df['value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
+  features6,
+  labels_6,
+  epochs=settings["basic"]["max_epochs"],
+  batch_size=settings["basic"]["batch_size"],
   shuffle=True,
-  validation_data=[val6_df.drop('value', axis = 1), val6_df['value']],
+  validation_data=[val_features6, val_labels_6],
   callbacks=[early_stopping_callback],
   verbose=1,
 )
 ```
 
 ```{python, train-1}
-fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+"fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 axs[0].plot(history_1.history["loss"], label="training")
 axs[0].plot(history_1.history["val_loss"], label="validation")

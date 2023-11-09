@@ -149,81 +149,9 @@ Since the intended implementation will be daily forecasts, testing performance
 will be assessed through hindcasting. The hindcast dataset is a holdout dataset
 beginning in 2021 across all lakes.
 
-```{python build-compile-model}
-#| echo: false
-def build_model(x_train, y_train, settings):
-  # create input layer
-  input_layer = tf.keras.layers.Input(shape=x_train.shape[1:])
-  
-  # # create hidden layers each with specific number of nodes
-  # assert len(settings["hiddens"]) == len(
-  #   settings["activations"]
-  # ), "hiddens and activations settings must be the same length."
-  
-  # add dropout layer
-  layers = tf.keras.layers.Dropout(rate=settings["dropout_rate"])(input_layer)
-  
-  for hidden, activation in zip(settings["hiddens"], settings["activations"]):
-    layers = tf.keras.layers.Dense(
-      units=hidden,
-      activation=activation,
-      use_bias=True,
-      kernel_regularizer=tf.keras.regularizers.l1_l2(l1=0, l2=0),
-      bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-      kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"]),
-      )(layers)
-  
-  # create output layer
-  output_layer = tf.keras.layers.Dense(
-    units=1,
-    activation="linear",
-    use_bias=True,
-    bias_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 1),
-    kernel_initializer=tf.keras.initializers.RandomNormal(seed=settings["random_seed"] + 2),
-  )(layers)
-  
-  # construct the model
-  model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
-  model.summary()
-  
-  return model
-
-
-def compile_model(model, settings):
-  model.compile(
-      optimizer=tf.keras.optimizers.Adam(
-        learning_rate=settings["learning_rate"],
-        ),
-      loss=tf.keras.losses.MeanSquaredError()
-  )
-  return model
-
-```
-
 ```{python hyperparm-settings-train}
-#| echo: false
-settings = {
-    "hiddens": [10, 7, 3],
-    "activations": ["relu", "relu", "relu"],
-    "learning_rate": 0.01,
-    "random_seed": 57,
-    "max_epochs": 1000,
-    "batch_size": 32,
-    "patience": 10,
-    "dropout_rate": 0.2,
-}
-
 tf.keras.backend.clear_session()
 tf.keras.utils.set_random_seed(settings["random_seed"])
-
-# define the early stopping callback
-early_stopping_callback = tf.keras.callbacks.EarlyStopping(
-  monitor="val_loss", 
-  patience=settings["patience"], 
-  restore_best_weights=True, 
-  mode="auto"
-)
-
 ```
 
 ```{python build-LOO}
