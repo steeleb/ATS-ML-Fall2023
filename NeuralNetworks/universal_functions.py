@@ -32,6 +32,17 @@ def load_pickle_file(file_name, file_path):
     with open(file_path + '/' + file_name, 'rb') as f:
         return pickle.load(f)
 
+def get_features_labels(train_dfs, val_dfs):
+  # grab the values we want to predict
+  labels = np.array(train_dfs['value'])
+  val_labels = np.array(val_dfs['value'])
+  
+  # and remove the labels from the dataset containing the feature set
+  features = train_dfs.drop(['value', 'feature', 'date'], axis=1)
+  val_features = val_dfs.drop(['value', 'feature', 'date'], axis=1)
+  
+  return features, labels, val_features, val_labels
+
 def calculate_vals(transformed_val, mean, std):
   actual_val = (transformed_val * std) + mean
   return actual_val
