@@ -27,6 +27,7 @@ use_condaenv('~/miniconda3/envs/env_ATSML/')
 
 #high level modules
 import os
+import os
 import sys
 import imp
 import numpy as np
@@ -48,6 +49,11 @@ import matplotlib.patches as patches
 # import custom modules
 imp.load_source("settings","NeuralNetworks/settings.py")
 from settings import settings
+imp.load_source("tvt", "NeuralNetworks/preprocessing.py")
+from tvt import train1, val1, train2, val2, train3, val3, train4, val4, train5, val5, train6, val6
+from tvt import train1_ts, val1_ts, train2_ts, val2_ts, train3_ts, val3_ts, train4_ts, val4_ts
+imp.load_source("architecture", "NeuralNetworks/architecture.py")
+from architecture import build_model, compile_model
 imp.load_source("tvt", "NeuralNetworks/preprocessing.py")
 from tvt import train1, val1, train2, val2, train3, val3, train4, val4, train5, val5, train6, val6
 from tvt import train1_ts, val1_ts, train2_ts, val2_ts, train3_ts, val3_ts, train4_ts, val4_ts
@@ -123,7 +129,7 @@ mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_d
 
 
 ```{python, train-1}
-"fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+fig, axs = plt.subplots(1, 2, figsize=(10, 4))
 
 axs[0].plot(history_1.history["loss"], label="training")
 axs[0].plot(history_1.history["val_loss"], label="validation")

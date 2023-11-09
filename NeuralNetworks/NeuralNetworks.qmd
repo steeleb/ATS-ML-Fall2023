@@ -151,6 +151,197 @@ tf.keras.backend.clear_session()
 tf.keras.utils.set_random_seed(settings["random_seed"])
 ```
 
+```{python build-LOO}
+#| echo: false
+#| output: false
+model_1 = build_model(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  settings)
+model_1 = compile_model(model_1, settings)
+
+# train the model via model.fit
+history_1 = model_1.fit(
+  train1_df.drop('std__value', axis = 1), 
+  train1_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val1_df.drop('std__value', axis = 1), val1_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_2 = build_model(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  settings)
+model_2 = compile_model(model_2, settings)
+
+# train the model via model.fit
+history_2 = model_2.fit(
+  train2_df.drop('std__value', axis = 1), 
+  train2_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val2_df.drop('std__value', axis = 1), val2_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_3 = build_model(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  settings)
+model_3 = compile_model(model_3, settings)
+
+# train the model via model.fit
+history_3 = model_3.fit(
+  train3_df.drop('std__value', axis = 1), 
+  train3_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val3_df.drop('std__value', axis = 1), val3_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_4 = build_model(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  settings)
+model_4 = compile_model(model_4, settings)
+
+# train the model via model.fit
+history_4 = model_4.fit(
+  train4_df.drop('std__value', axis = 1), 
+  train4_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val4_df.drop('std__value', axis = 1), val4_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_5 = build_model(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  settings)
+model_5 = compile_model(model_5, settings)
+
+# train the model via model.fit
+history_5 = model_5.fit(
+  train5_df.drop('std__value', axis = 1), 
+  train5_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val5_df.drop('std__value', axis = 1), val5_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_6 = build_model(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  settings)
+model_6 = compile_model(model_6, settings)
+
+# train the model via model.fit
+history_6 = model_6.fit(
+  train6_df.drop('std__value', axis = 1), 
+  train6_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val6_df.drop('std__value', axis = 1), val6_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+```
+
+```{python build-ts}
+#| echo: false
+#| output: false
+
+model_1_ts = build_model(
+  train1_ts_df.drop('std__value', axis = 1), 
+  train1_ts_df['std__value'], 
+  settings)
+model_1_ts = compile_model(model_1_ts, settings)
+
+# train the model via model.fit
+history_1_ts = model_1_ts.fit(
+  train1_ts_df.drop('std__value', axis = 1), 
+  train1_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val1_ts_df.drop('std__value', axis = 1), val1_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_2_ts = build_model(
+  train2_ts_df.drop('std__value', axis = 1), 
+  train2_ts_df['std__value'], 
+  settings)
+model_2_ts = compile_model(model_2_ts, settings)
+
+# train the model via model.fit
+history_2_ts = model_2_ts.fit(
+  train2_ts_df.drop('std__value', axis = 1), 
+  train2_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val2_ts_df.drop('std__value', axis = 1), val2_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+model_3_ts = build_model(
+  train3_ts_df.drop('std__value', axis = 1), 
+  train3_ts_df['std__value'], 
+  settings)
+model_3_ts = compile_model(model_3_ts, settings)
+
+# train the model via model.fit
+history_3_ts = model_3_ts.fit(
+  train3_ts_df.drop('std__value', axis = 1), 
+  train3_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val3_ts_df.drop('std__value', axis = 1), val3_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+
+model_4_ts = build_model(
+  train4_ts_df.drop('std__value', axis = 1), 
+  train4_ts_df['std__value'], 
+  settings)
+model_4_ts = compile_model(model_4_ts, settings)
+
+# train the model via model.fit
+history_4_ts = model_4_ts.fit(
+  train4_ts_df.drop('std__value', axis = 1), 
+  train4_ts_df['std__value'], 
+  epochs=settings["max_epochs"],
+  batch_size=settings["batch_size"],
+  shuffle=True,
+  validation_data=[val4_ts_df.drop('std__value', axis = 1), val4_ts_df['std__value']],
+  callbacks=[early_stopping_callback],
+  verbose=1,
+)
+
+```
+
 ## Results
 
 ```{python loo-calc-pred}
