@@ -1,5 +1,5 @@
 ---
-title: "Estimation of Daily Water Temperature using Neural Networks"
+title: "Estimation of Daily Water Temperature using Fully-Connected Neural Networks"
 author: "B Steele"
 date: today
 date-format: long

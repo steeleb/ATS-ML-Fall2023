@@ -1,0 +1,58 @@
+import pickle
+import numpy as np
+import tensorflow as tf
+from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_absolute_error
+
+def save_to_pickle(obj, filepath):
+    """
+    Save an object to a pickle file.
+    
+    Parameters:
+    obj (object): The object to be saved.
+    filepath (str): The filepath to save the object to.
+    
+    Returns:
+    None
+    """
+    with open(filepath, 'wb') as f:
+        pickle.dump(obj, f)
+
+def load_pickle_file(file_name, file_path):
+    """
+    Load a pickle file from a given file path and file name.
+
+    Args:
+    file_path (str): The path to the directory containing the pickle file.
+    file_name (str): The name of the pickle file.
+
+    Returns:
+    any: The object stored in the pickle file.
+    """
+    with open(file_path + '/' + file_name, 'rb') as f:
+        return pickle.load(f)
+
+def calculate_vals(transformed_val, mean, std):
+  actual_val = (transformed_val * std) + mean
+  return actual_val
+
+def predict_values(model, features, val_features, labels, val_labels, t_mean, t_std):
+    pred = model.predict(features)
+    val = model.predict(val_features)
+    p_act = calculate_vals(pred, t_mean, t_std)
+    l_act = calculate_vals(labels, t_mean, t_std)
+    v_act = calculate_vals(val, t_mean, t_std)
+    l_v_act = calculate_vals(val_labels, t_mean, t_std)
+    return p_act, l_act, v_act, l_v_act
+
+def print_error_metrics(dataset_num, l_act, p_act, l_v_act, v_act):
+    t_mse = mean_squared_error(l_act, p_act)
+    t_mae = mean_absolute_error(l_act, p_act)
+    v_mse = mean_squared_error(l_v_act, v_act)
+    v_mae = mean_absolute_error(l_v_act, v_act)
+    print("DATASET", dataset_num)
+    print("Mean Squared Error for Training Dataset", dataset_num, ":", t_mse)
+    print("Mean Absolute Error for Training Dataset", dataset_num, ":", t_mae)
+    print("Mean Squared Error for Validation Dataset", dataset_num, ":", v_mse)
+    print("Mean Absolute Error for Validation Dataset", dataset_num, ":", v_mae)
+    print(' ')
