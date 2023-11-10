@@ -10,6 +10,7 @@ editor:
 editor_options:
   markdown:
     wrap: 80
+bibliography: references.bib
 ---
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
@@ -29,6 +30,8 @@ dir = "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/
 
 ```{python import-modules}
 #| echo: false
+#| message: false
+#| include: false
 
 import os
 import sys
@@ -43,9 +46,18 @@ import sklearn
 import matplotlib.pyplot as plt
 
 # custom modules
+this_dir = "/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/"
+imp.load_source("settings",os.path.join(this_dir,"NeuralNetworks/settings.py"))
+from settings import settings
 
+imp.load_source("universals", os.path.join(this_dir, "NeuralNetworks/universal_functions.py"))
+from universals import load_pickle_file, return_test_error_metrics
 
+imp.load_source("vis", os.path.join(this_dir, "NeuralNetworks/vis_functions.py"))
+from vis import plot_history_loss
 
+imp.load_source("hindcast", os.path.join(this_dir, "NeuralNetworks/hindcasting/basic_leaky_implementation.py"))
+from hindcast import test_ensemble
 ```
 
 ## Scientific motivation and problem statement:
@@ -70,28 +82,6 @@ for prediction. To capture annual warming and seasonal warm-up/cool-down, which
 are not always consistent between annual cycles, I've implemented an annual
 cumulative sum for both temperature and solar radiation and the day of year
 within the feature set.
-
-```{r baseline, echo=FALSE, message=FALSE}
-full_dataset <- read_csv(file.path(dir, "training_set_up_to_2021_v2023-11-08.csv"))
-baseline_by_date <- full_dataset %>% 
-  group_by(day_of_year) %>% 
-  summarize(mean_temp_by_date_deg_C = mean(value),
-            n = n()) %>% 
-  left_join(full_dataset, .) %>% 
-  #remove days where there are less than or equal to 3 observations contributing to the mean
-  filter(n > 3)
-
-base_mae = mae(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
-base_mse = mse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
-base_rmse = rmse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
-base_mape = mape(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
-```
-
-The comparative baseline for this analysis will be the day-of-year average water
-temperature across all lakes and years, where there are at least 3 values
-contributing to the mean. The baseline estimates result in a MAE of
-`r round(base_mae, 2)` deg C, MSE of `r round(base_mse, 2)` deg C, RMSE of
-`r round(base_rmse, 2)`, and MAPE of `r round(base_mape*100, 2)`%.
 
 ```{r load-ref-files, echo = F, message = F}
 is_dir = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
@@ -128,6 +118,36 @@ Gap reservoir has been dropped from this analysis (loss of
 `r nrow(NW_estimates %>% filter(feature == "Windy Gap Reservoir"))` rows in
 aforementioned datasets).
 
+```{r baseline, echo=FALSE, message=FALSE}
+full_dataset <- read_csv(file.path(dir, "training_set_up_to_2021_v2023-11-08.csv"))
+baseline_by_date <- full_dataset %>% 
+  group_by(day_of_year) %>% 
+  summarize(mean_temp_by_date_deg_C = mean(value),
+            n = n()) %>% 
+  left_join(full_dataset, .) %>% 
+  #remove days where there are less than or equal to 3 observations contributing to the mean
+  filter(n > 3)
+
+base_mae = mae(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_mse = mse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_rmse = rmse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_mape = mape(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+```
+
+The comparative baseline for this analysis will be the day-of-year average water
+temperature across all lakes and years, where there are at least 3 values
+contributing to the mean. The baseline estimates result in a MAE of
+`r round(base_mae, 2)` deg C, MSE of `r round(base_mse, 2)` deg C, RMSE of
+`r round(base_rmse, 2)`, and MAPE of `r round(base_mape*100, 2)`%.
+
+Current models to predict water temperature have used recurrent neural networks
+(specifically LSTMs/process guided models) with a median RMSE of 1.65 deg C
+across 68 lakes in the midwest [@read2019] and process guided and metatransfer
+learning networks with 1.88 deg C across more than 300 lakes [@willard2021].
+While these metrics describe error across multiple lake depths (not just surface
+temperature) and are propagated through more complicated networks, I think these
+are examples of well-performing model error metrics.
+
 ## Training/Validation/Testing
 
 ### Preprocessing
@@ -153,104 +173,277 @@ overfit to the data, not allowing for generalization beyond these lakes.
 
 For training and validation I will use two techniques. First, a leave-one-out
 method that will result in six NN models where each iteration will use data from
-a single lake for validation and the other five for training. Because the random
-forest models did not appear to overfit to the static variables, I'm also trying
-a timeseries method that will subset the data into \~10 year increments and
-leave one increment out per training and use it for validation per iteration.
-Since the intended implementation will be daily forecasts, testing performance
-will be assessed through hindcasting. The hindcast dataset is a holdout dataset
-beginning in 2021 across all lakes.
+a single lake for validation and the other five for training. While the random
+forest models did not appear to overfit to the static variables, I'm still going
+to utilize a timeseries split method that will subset the data into \~10 year
+increments and leave one increment out per training and use it for validation
+per iteration. Since the intended implementation will be daily forecasts,
+testing performance will be assessed through hindcasting. The hindcast dataset
+is a holdout dataset for the years 2021 and 2022 across all lakes including in
+training/validation.
 
-## Results
+## Model Architecture
 
-```{python load-models}
-
-```
-
-### Leave one out validations
-
-These are super hit-or-miss. MSE ranges from 3-10. Pretty terrible.
-
-```{r loo-val-figs, echo=F}
-# ggplot(val1, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val2, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val3, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val4, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val5, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val6, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-
-```
-
-### Timeseries split validations
-
-These are good until the most recent data, which look horrid. MSE is smaller,
-but still higher than baseline (3-5).
-
-```{r ts-val-figs, echo = F}
-# ggplot(val1_ts, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val2_ts, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val3_ts, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-# 
-# ggplot(val4_ts, aes(x = date, y = value)) +
-#   geom_point() +
-#   geom_point(aes(y = pred), color = 'orange') +
-#   facet_grid(feature ~ .) +
-#   theme_bw()
-```
+The models described in this document are comprised of a fully-connected neural
+networks with an input layer, a dropout layer, hidden layers (number of layers,
+number of neurons, and activation functions defined in `settings`), and an
+output layer with a single neuron with a linear activation function. I used the
+`tf.keras.optimizers.Adam` optimizer which employs an adaptive learning rate.
+Loss function was set to MSE (`tf.keras.losses.MeanSquaredError`). For the
+purposes of this assignment, L1 and L2 regularization were both set at 0 for all
+models.
 
 ### Hyper-parameter tuning
 
-Current settings:
+I first attempted to overfit the neural network to assure that my workflow was
+operating correctly with zero dropout and five hidden layers of 30 neurons each,
+all with leakyReLu activation. Learning rate was set to 0.001 with a patience of
+500 and max epochs of 1000. Batch size was set at 128.
+
+For the purposes of this analysis, I define an *overfit* model as that has
+minimizing loss over epochs for the training set and exhibits increasing loss
+with increasing epochs for the validation. This behavior indicates that the
+model has been customized to the training data and is no longer transferable to
+other datasets with any viable accuracy. Because I used the same settings for
+the LOO and the timeseries splits, there were different degrees of overfit
+between the two training-validation split types. The LOO was substantially
+overfit with these settings (Supplemental Figure A), but the timeseries split
+did not seem to be as overfit as the LOO scenario (Supplemental Figure B).
+
+From here, I manually tuned the batch size, number of hidden layers, and number
+of neurons per layer until I felt like the model was performing well and where
+overfitting was minimized. I reduced the number of hidden layers and the number
+of neurons per layer, reduced the batch size, and added a dropout of 0.2.
 
 ```{python}
-#settings["basic"]
+#| eval: false
+"leaky_basic" = { 
+    "hiddens": [20, 20, 20],
+    "activations": ["leaky_relu", "leaky_relu", "leaky_relu"],
+    "learning_rate": 0.001,
+    "random_seed": 57,
+    "max_epochs": 1000,
+    "batch_size": 64,
+    "patience": 200,
+    "dropout_rate": 0.2
+  }
 ```
 
-<!-- ### Hindcasting application -->
+I looked for validation losses that were stable over epochs to determine that
+overfitting was minimized (Supplemental Figure C, D).
 
-<!-- ### Discussion -->
+### Ensemble Model
 
-<!-- ## Supporting Figures -->
+Given the performance of the ensemble model in [@willard2021], which decreased
+error by nearly half a degree in their efforts, I'm going to implement that
+strategy for both the LOO and timeseries models.
+
+## Results
+
+### Hindcasting application
+
+```{python}
+#| echo: false
+LOO_mse, LOO_mae, LOO_rmse, LOO_mape = (return_test_error_metrics(
+  test_ensemble['value'], test_ensemble['LOO_ensemble_pred']))
+ts_mse, ts_mae, ts_rmse, ts_mape = (return_test_error_metrics(
+  test_ensemble['value'], test_ensemble['ts_ensemble_pred']))
+```
+
+Because the LOO models do not perform consistently across lakes, I employed an
+ensemble method with the 6 models for the hindcasting (test) application. The
+predicted temperature will be the mean value from all 6 models. The hindcasting
+test set performed similarly with the LOO ensemble and the timeseries ensemble.
+MAE was `r round(py$LOO_mae, 2)` and `r round(py$ts_mae, 2)` deg C, MSE was
+`r round(py$LOO_mse, 2)` and `r round(py$ts_mse, 2)` deg C, RMSE was
+`r round(py$LOO_rmse, 2)` and `r round(py$ts_rmse, 2)` deg C, and MAPE was
+`r round(py$LOO_mape*100, 2)` and `r round(py$ts_mape*100, 2)` percent
+respectively. Both models consistently underpredicted temperature in Horsetooth
+reservoir, particularily in the Fall of 2022 (Figure 1, 2). Granby, an outlier
+during model development looked more accurate than Willow Creek when predicted
+using either ensemble model.
+
+```{r loo-val-figs, echo=F}
+#| fig-cap: "Predicted surface water temperature during the hindcast period of 2021 and 2022 using the leave-one-out ensemble model. Black dots are actual values, gold dots are predicted."
+#| 
+test <- py$test_ensemble %>% 
+  mutate(date = ymd(date)) %>% 
+  filter(date < ymd("2023-01-01"))
+
+ggplot(test, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = LOO_ensemble_pred), color = 'orange') +
+  facet_grid(feature ~ ., labeller = label_wrap_gen(width = 10)) +
+  labs(x = NULL, y = "surface water temperature (deg C)")+
+  theme_bw()
+```
+
+```{r ts-val-figs, echo = F}
+#| fig-cap: "Predicted surface water temperature during the hindcast period of 2021 and 2022 using the timeseries ensemble model. Black dots are actual values, gold dots are predicted."
+ggplot(test, aes(x = date, y = value)) +
+  geom_point() +
+  geom_point(aes(y = ts_ensemble_pred), color = 'orange') +
+  facet_grid(feature ~ ., labeller = label_wrap_gen(width = 10)) +
+  labs(x = NULL, y = "surface water temperature (deg C)")+
+  theme_bw()
+```
+
+## Discussion
+
+### Model Performance
+
+The training-validation splits for LOO did not perform consistently across
+lakes. The datasets with Granby Reservoir (LOO #4) and Willow Creek Reservoir
+(LOO #6) performed more poorly than the other training-validation splits. I
+don't think this is because the network 'learned' the individual lakes and was
+therefore not generalizable, as much as the fact that these two waterbodies are
+both outliers within this dataset. Granby Reservoir is the largest (by surface
+area) reservoir in Colorado and therefore has physical properties and patterns
+that can not be mimicked in smaller waterbodies. Willow Creek is a very small
+reservoir that is not always used for storage, meaning sometimes it hold little
+water - I believe this results in water temperatures that mimic streams, rather
+than waterbodies (where the water mass can retain heat). This result is more of
+a preamble of caution when applying to waterbodies that are outside of this
+dataset.
+
+When the ensemble models were applied to the hindcast dataset, It was striking
+how poorly the estimates for Horsetooth Reservoir were, where the model
+consistently underpredicted water temperature. 2020 forward was a particularly
+dry time in the climatological past - most of Colorado experience severe drought
+and many reservoirs were at historically low levels until 2023. The ensemble
+model performed reasonably well at Granby Reservoir, but quite poorly at Willow
+Creek, the two outliers from model development.
+
+It is possible that some of the predicted-observed outliers are more due to
+errors in the Landsat-derived dataset than the model. It would be useful to see
+if the error metrics are consistent between the manual sampling record and the
+Landsat record. You can clearly see a value at Horsetooth Reservoir early in
+2021 (Figure 1, 2) that I would argue is physically impossible, considering the
+neighboring values. While the MSE for the Landsat-derived data is around 1.5
+degrees, the members of the tail could be adversely affecting model development
+and performance.
+
+### Future steps
+
+I'd like to add in reservoir height to this model to try to offset the
+inter-annual and -seasonal variability that may be driving the differences
+between performance at these reservoirs. Additionally, I think it would be
+appropriate to bring in the other Northern Reservoirs where we have
+remotely-sensed water temperature only as a way to build out the model, but only
+after we've constrained the Landsat-derived temperature error a bit more.
+
+I do think this dataset and scientific question would be a good candidate for
+LSTM or other autoregressive NN techniques. While the ensemble model performs
+reasonably well, it does not outperform the models presented in the literature.
+
+{{< pagebreak >}}
+
+## References
+
+::: {#refs}
+:::
+
+{{< pagebreak >}}
+
+## Supporting Figures
+
+```{python sf-a}
+#| echo: false
+#| fig-cap: "Supplemental Figure A. Intentionally overfit dense neural network loss curves using leave one out technique."
+#| fig-subcap: ""
+#| layout: [[1, 1], [1, 1], [1, 1], [1]]
+# model directory path
+model_dir = '/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/models/leaky_overfit/'
+
+histories = [f for f in os.listdir(model_dir) if 'history' in f]
+
+ts_histories = [f for f in histories if 'ts' in f]
+ts_histories.sort()
+
+histories = [f for f in histories if 'ts' not in f]
+histories.sort()
+
+history_1 = load_pickle_file(histories[0], model_dir)
+history_2 = load_pickle_file(histories[1], model_dir)
+history_3 = load_pickle_file(histories[2], model_dir)
+history_4 = load_pickle_file(histories[3], model_dir)
+history_5 = load_pickle_file(histories[4], model_dir)
+history_6 = load_pickle_file(histories[5], model_dir)
+
+plot_history_loss(history_1, 'Overfit LOO Dataset 1')
+plot_history_loss(history_2, 'Overfit LOO Dataset 2')
+plot_history_loss(history_3, 'Overfit LOO Dataset 3')
+plot_history_loss(history_4, 'Overfit LOO Dataset 4')
+plot_history_loss(history_5, 'Overfit LOO Dataset 5')
+plot_history_loss(history_6, 'Overfit LOO Dataset 6')
+```
+
+```{python sf-b}
+#| echo: false
+#| fig-cap: "Supplemental Figure B. Intentionally overfit dense neural network loss curves using timeseries technique."
+#| fig-subcap: ""
+#| layout: [[1, 1], [1, 1], [1]]
+
+ts_history_1 = load_pickle_file(ts_histories[0], model_dir)
+ts_history_2 = load_pickle_file(ts_histories[1], model_dir)
+ts_history_3 = load_pickle_file(ts_histories[2], model_dir)
+ts_history_4 = load_pickle_file(ts_histories[3], model_dir)
+
+plot_history_loss(ts_history_1, 'Overfit Timeseries Dataset 1')
+plot_history_loss(ts_history_2, 'Overfit Timeseries Dataset 2')
+plot_history_loss(ts_history_3, 'Overfit Timeseries Dataset 3')
+plot_history_loss(ts_history_4, 'Overfit Timeseries Dataset 4')
+
+```
+
+```{python sf-c}
+#| echo: false
+#| fig-cap: "Supplemental Figure C. Optimized dense neural network loss curves using leave one out technique."
+#| fig-subcap: ""
+#| layout: [[1, 1], [1, 1], [1, 1], [1]]
+
+# model directory path
+model_dir = '/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/models/leaky_basic/'
+
+histories = [f for f in os.listdir(model_dir) if 'history' in f]
+
+ts_histories = [f for f in histories if 'ts' in f]
+ts_histories.sort()
+
+histories = [f for f in histories if 'ts' not in f]
+histories.sort()
+
+history_1 = load_pickle_file(histories[0], model_dir)
+history_2 = load_pickle_file(histories[1], model_dir)
+history_3 = load_pickle_file(histories[2], model_dir)
+history_4 = load_pickle_file(histories[3], model_dir)
+history_5 = load_pickle_file(histories[4], model_dir)
+history_6 = load_pickle_file(histories[5], model_dir)
+
+plot_history_loss(history_1, 'LOO Dataset 1')
+plot_history_loss(history_2, 'LOO Dataset 2')
+plot_history_loss(history_3, 'LOO Dataset 3')
+plot_history_loss(history_4, 'LOO Dataset 4')
+plot_history_loss(history_5, 'LOO Dataset 5')
+plot_history_loss(history_6, 'LOO Dataset 6')
+```
+
+```{python sf-d}
+#| echo: false
+#| message: false
+#| #| label: sf-d
+#| fig-cap: "Supplemental Figure D. Optimized dense neural network loss curves using timseries technique."
+#| fig-subcap: ""
+#| layout: [[1, 1], [1, 1], [1]]
+
+ts_history_1 = load_pickle_file(ts_histories[0], model_dir)
+ts_history_2 = load_pickle_file(ts_histories[1], model_dir)
+ts_history_3 = load_pickle_file(ts_histories[2], model_dir)
+ts_history_4 = load_pickle_file(ts_histories[3], model_dir)
+
+plot_history_loss(ts_history_1, 'Timeseries Dataset 1')
+plot_history_loss(ts_history_2, 'Timeseries Dataset 2')
+plot_history_loss(ts_history_3, 'Timeseries Dataset 3')
+plot_history_loss(ts_history_4, 'Timeseries Dataset 4')
+
+```
