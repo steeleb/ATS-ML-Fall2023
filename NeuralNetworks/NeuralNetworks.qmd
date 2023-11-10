@@ -18,69 +18,61 @@ editor_options:
 library(tidyverse)
 library(reticulate)
 library(kableExtra)
+library(Metrics)
 
 # activate conda env
 use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+# data directory
+dir = "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/"
 ```
 
 ```{python import-modules}
 #| echo: false
+
+import os
 import sys
+import imp
 import numpy as np
 import seaborn as sb
 import pickle
-
 import pandas as pd
 import datetime
 import tensorflow as tf
-# Let's import some different things we will use to build the neural network
-from tensorflow.keras import Model
-from tensorflow.keras.layers import Dense, Input, Dropout, Softmax
-
 import sklearn
-from sklearn.preprocessing import FunctionTransformer
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.compose import ColumnTransformer
-
-# import pydot
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-```
 
-```{python test-py}
-#| echo: false
-test = r.test
-# grab the values we want to predict
-test_labels = np.array(test['value'])
-test_features = (test
-  .drop(['value', 'feature', 'date'], axis = 1))
+# custom modules
+
+
+
 ```
 
 ## Scientific motivation and problem statement:
 
 Water temperature is often an indicator of water quality, as it governs much of
-the biological activity in freshwater. While temperature is an important
+the biological activity in freshwater systems. While temperature is an important
 parameter to monitor in freshwater lakes, manual monitoring of waterbodies (by
 physically visiting a site) and sensor networks to monitor water temperature,
 are costly endeavors.
 
-In this example, I will use a simple fully-connected neural network to estimate
-water surface temperature for reservoirs with long manual monitoring data from
+In this example, I will use a fully-connected neural network to estimate water
+surface temperature for reservoirs with long manual monitoring data from
 Northern Water, the municipal subdistrict that delivers drinking water to
 approximately 1 million people in northern Colorado and irrigation water for
 \~600,000 acres of land. The features that I will be using to estimate surface
 temperature include summary NLDAS meteorological data (air temperature,
 precipitation, solar radiation, and wind) as well as static values for each of
 the reservoirs (elevation, surface area, maximum depth, volume, and shoreline
-distance). To capture seasonal dynamics, I've also included the numerical day of
-year to the feature set. The NLDAS data have been summarized for the previous
-day's weather, 3 days prior, and 5 days prior - meaning, the model does not use
-*today's* weather for prediction. To capture seasonal warming which is
-inconsistent between annual cycles, I've implemented an annual cumulative sum
-for both temperature and solar radiation.
+distance). The NLDAS data have been summarized for the previous day's weather, 3
+days prior, and 5 days prior - meaning, the model does not use *today's* weather
+for prediction. To capture annual warming and seasonal warm-up/cool-down, which
+are not always consistent between annual cycles, I've implemented an annual
+cumulative sum for both temperature and solar radiation and the day of year
+within the feature set.
 
 ```{r baseline, echo=FALSE, message=FALSE}
+full_dataset <- read_csv(file.path(dir, "training_set_up_to_2021_v2023-11-08.csv"))
 baseline_by_date <- full_dataset %>% 
   group_by(day_of_year) %>% 
   summarize(mean_temp_by_date_deg_C = mean(value),
@@ -89,23 +81,39 @@ baseline_by_date <- full_dataset %>%
   #remove days where there are less than or equal to 3 observations contributing to the mean
   filter(n > 3)
 
-```
-
-```{python baseline-error}
-#| echo: false
-baseline_day = r.baseline_by_date
-mae_baseline_day_errors = np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C']))
-baseline_mae_err_text = round(mae_baseline_day_errors, 2)
-
-mse_baseline_day_errors = np.sqrt(np.mean(abs(baseline_day['value'] - baseline_day['mean_temp_by_date_deg_C'])**2))
-baseline_mse_err_text = round(mse_baseline_day_errors, 2)
+base_mae = mae(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_mse = mse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_rmse = rmse(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
+base_mape = mape(baseline_by_date$value, baseline_by_date$mean_temp_by_date_deg_C)
 ```
 
 The comparative baseline for this analysis will be the day-of-year average water
 temperature across all lakes and years, where there are at least 3 values
 contributing to the mean. The baseline estimates result in a MAE of
-`r py$baseline_mae_err_text` deg C and MSE of `r py$baseline_mse_err_text` deg
-C.
+`r round(base_mae, 2)` deg C, MSE of `r round(base_mse, 2)` deg C, RMSE of
+`r round(base_rmse, 2)`, and MAPE of `r round(base_mape*100, 2)`%.
+
+```{r load-ref-files, echo = F, message = F}
+is_dir = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+surf_temp <- read_csv(file.path(is_dir, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv')) %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1) %>% 
+  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
+                        'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
+  filter(date < ymd("2023-01-01"))
+
+rs_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = adj_medTemp,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature),
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
+```
 
 In addition to the manual sampling record that is maintained by Northern Water
 (n = `r nrow(surf_temp)`), I will be leveraging surface temperature estimates
@@ -115,17 +123,24 @@ reservoirs and have been bias-corrected for over estimates in the warmest
 months. 'Surface temperature' in the manual sampling record for this example is
 any measured temperature at \>= 1m depth. I retain only the top-most value for
 temperature. Static variables are only available for 6 of 7 reservoirs, so Windy
-Gap reservoir has been dropped from this analysis.
+Gap reservoir has been dropped from this analysis (loss of
+`r nrow(surf_temp %>% filter(feature == "Windy Gap Reservoir"))` and
+`r nrow(NW_estimates %>% filter(feature == "Windy Gap Reservoir"))` rows in
+aforementioned datasets).
+
+## Training/Validation/Testing
+
+### Preprocessing
 
 All precipitation data are right skewed heavily biased to low precip values
 including zero, to account for this and make the distribution more normal, I
-added 0.0001 to each value and applied a square root transformation to this
-subset. The wind data were left skewed and to transform the distribution, I used
-a log function. All features and inputs were then scaled using the mean and
-standard deviation to get the values closer around zero, which are preferable
-for neural networks.
+added 0.0001 to each value and applied a log-10 transformation to this subset.
+The wind data were left skewed and to transform the distribution, I used a
+square root transformation. All features and inputs were then scaled using the
+mean and standard deviation to get the values closer around zero, which are
+preferable for neural networks.
 
-## Training/Validation/Testing
+### Train-validation-test split
 
 Eventual implementation of this algorithm will include forecasting of
 temperature for these lakes as well as lakes that have only Landsat-derived
@@ -146,268 +161,9 @@ Since the intended implementation will be daily forecasts, testing performance
 will be assessed through hindcasting. The hindcast dataset is a holdout dataset
 beginning in 2021 across all lakes.
 
-```{python hyperparm-settings-train}
-tf.keras.backend.clear_session()
-tf.keras.utils.set_random_seed(settings["random_seed"])
-```
-
-```{python build-LOO}
-#| echo: false
-#| output: false
-model_1 = build_model(
-  train1_df.drop('std__value', axis = 1), 
-  train1_df['std__value'], 
-  settings)
-model_1 = compile_model(model_1, settings)
-
-# train the model via model.fit
-history_1 = model_1.fit(
-  train1_df.drop('std__value', axis = 1), 
-  train1_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val1_df.drop('std__value', axis = 1), val1_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_2 = build_model(
-  train2_df.drop('std__value', axis = 1), 
-  train2_df['std__value'], 
-  settings)
-model_2 = compile_model(model_2, settings)
-
-# train the model via model.fit
-history_2 = model_2.fit(
-  train2_df.drop('std__value', axis = 1), 
-  train2_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val2_df.drop('std__value', axis = 1), val2_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_3 = build_model(
-  train3_df.drop('std__value', axis = 1), 
-  train3_df['std__value'], 
-  settings)
-model_3 = compile_model(model_3, settings)
-
-# train the model via model.fit
-history_3 = model_3.fit(
-  train3_df.drop('std__value', axis = 1), 
-  train3_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val3_df.drop('std__value', axis = 1), val3_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_4 = build_model(
-  train4_df.drop('std__value', axis = 1), 
-  train4_df['std__value'], 
-  settings)
-model_4 = compile_model(model_4, settings)
-
-# train the model via model.fit
-history_4 = model_4.fit(
-  train4_df.drop('std__value', axis = 1), 
-  train4_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val4_df.drop('std__value', axis = 1), val4_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_5 = build_model(
-  train5_df.drop('std__value', axis = 1), 
-  train5_df['std__value'], 
-  settings)
-model_5 = compile_model(model_5, settings)
-
-# train the model via model.fit
-history_5 = model_5.fit(
-  train5_df.drop('std__value', axis = 1), 
-  train5_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val5_df.drop('std__value', axis = 1), val5_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_6 = build_model(
-  train6_df.drop('std__value', axis = 1), 
-  train6_df['std__value'], 
-  settings)
-model_6 = compile_model(model_6, settings)
-
-# train the model via model.fit
-history_6 = model_6.fit(
-  train6_df.drop('std__value', axis = 1), 
-  train6_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val6_df.drop('std__value', axis = 1), val6_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-```
-
-```{python build-ts}
-#| echo: false
-#| output: false
-
-model_1_ts = build_model(
-  train1_ts_df.drop('std__value', axis = 1), 
-  train1_ts_df['std__value'], 
-  settings)
-model_1_ts = compile_model(model_1_ts, settings)
-
-# train the model via model.fit
-history_1_ts = model_1_ts.fit(
-  train1_ts_df.drop('std__value', axis = 1), 
-  train1_ts_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val1_ts_df.drop('std__value', axis = 1), val1_ts_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_2_ts = build_model(
-  train2_ts_df.drop('std__value', axis = 1), 
-  train2_ts_df['std__value'], 
-  settings)
-model_2_ts = compile_model(model_2_ts, settings)
-
-# train the model via model.fit
-history_2_ts = model_2_ts.fit(
-  train2_ts_df.drop('std__value', axis = 1), 
-  train2_ts_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val2_ts_df.drop('std__value', axis = 1), val2_ts_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-model_3_ts = build_model(
-  train3_ts_df.drop('std__value', axis = 1), 
-  train3_ts_df['std__value'], 
-  settings)
-model_3_ts = compile_model(model_3_ts, settings)
-
-# train the model via model.fit
-history_3_ts = model_3_ts.fit(
-  train3_ts_df.drop('std__value', axis = 1), 
-  train3_ts_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val3_ts_df.drop('std__value', axis = 1), val3_ts_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-
-model_4_ts = build_model(
-  train4_ts_df.drop('std__value', axis = 1), 
-  train4_ts_df['std__value'], 
-  settings)
-model_4_ts = compile_model(model_4_ts, settings)
-
-# train the model via model.fit
-history_4_ts = model_4_ts.fit(
-  train4_ts_df.drop('std__value', axis = 1), 
-  train4_ts_df['std__value'], 
-  epochs=settings["max_epochs"],
-  batch_size=settings["batch_size"],
-  shuffle=True,
-  validation_data=[val4_ts_df.drop('std__value', axis = 1), val4_ts_df['std__value']],
-  callbacks=[early_stopping_callback],
-  verbose=1,
-)
-
-```
-
 ## Results
 
-```{python loo-calc-pred}
-#| echo: false
-#| output: false
-
-```
-
-```{python ts-calc-pred}
-#| echo: false
-#| output: false
-
-mean_1_ts = train1_ts['value'].mean()
-std_1_ts = train1_ts['value'].std()
-pred_1_ts = model_1_ts.predict(train1_ts_df.drop('std__value', axis = 1))
-val_1_ts = model_1_ts.predict(val1_ts_df.drop('std__value', axis = 1))
-p_act_1_ts = calculate_vals(pred_1_ts, mean_1_ts, std_1_ts)
-v_act_1_ts = calculate_vals(val_1_ts, mean_1_ts, std_1_ts)
-
-mean_2_ts = train2_ts['value'].mean()
-std_2_ts = train2_ts['value'].std()
-pred_2_ts = model_2_ts.predict(train2_ts_df.drop('std__value', axis = 1))
-val_2_ts = model_2_ts.predict(val2_ts_df.drop('std__value', axis = 1))
-p_act_2_ts = calculate_vals(pred_2_ts, mean_2_ts, std_2_ts)
-v_act_2_ts = calculate_vals(val_2_ts, mean_2_ts, std_2_ts)
-
-mean_3_ts = train3_ts['value'].mean()
-std_3_ts = train3_ts['value'].std()
-pred_3_ts = model_3_ts.predict(train3_ts_df.drop('std__value', axis = 1))
-val_3_ts = model_3_ts.predict(val3_ts_df.drop('std__value', axis = 1))
-p_act_3_ts = calculate_vals(pred_3_ts, mean_3_ts, std_3_ts)
-v_act_3_ts = calculate_vals(val_3_ts, mean_3_ts, std_3_ts)
-
-mean_4_ts = train4_ts['value'].mean()
-std_4_ts = train4_ts['value'].std()
-pred_4_ts = model_4_ts.predict(train4_ts_df.drop('std__value', axis = 1))
-val_4_ts = model_4_ts.predict(val4_ts_df.drop('std__value', axis = 1))
-p_act_4_ts = calculate_vals(pred_4_ts, mean_4_ts, std_4_ts)
-v_act_4_ts = calculate_vals(val_4_ts, mean_4_ts, std_4_ts)
-
-```
-
-```{r assign-pred, echo=FALSE}
-train1$pred = py$p_act_1
-train2$pred = py$p_act_2
-train3$pred = py$p_act_3
-train4$pred = py$p_act_4
-train5$pred = py$p_act_5
-train6$pred = py$p_act_6
-
-val1$pred = py$v_act_1
-val2$pred = py$v_act_2
-val3$pred = py$v_act_3
-val4$pred = py$v_act_4
-val5$pred = py$v_act_5
-val6$pred = py$v_act_6
-
-train1_ts$pred = py$p_act_1_ts
-train2_ts$pred = py$p_act_2_ts
-train3_ts$pred = py$p_act_3_ts
-train4_ts$pred = py$p_act_4_ts
-
-val1_ts$pred = py$v_act_1_ts
-val2_ts$pred = py$v_act_2_ts
-val3_ts$pred = py$v_act_3_ts
-val4_ts$pred = py$v_act_4_ts
+```{python load-models}
 
 ```
 
@@ -416,41 +172,41 @@ val4_ts$pred = py$v_act_4_ts
 These are super hit-or-miss. MSE ranges from 3-10. Pretty terrible.
 
 ```{r loo-val-figs, echo=F}
-ggplot(val1, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val2, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val3, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val4, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val5, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val6, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
+# ggplot(val1, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val2, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val3, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val4, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val5, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val6, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
 
 ```
 
@@ -460,61 +216,29 @@ These are good until the most recent data, which look horrid. MSE is smaller,
 but still higher than baseline (3-5).
 
 ```{r ts-val-figs, echo = F}
-ggplot(val1_ts, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val2_ts, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val3_ts, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-
-ggplot(val4_ts, aes(x = date, y = value)) +
-  geom_point() +
-  geom_point(aes(y = pred), color = 'orange') +
-  facet_grid(feature ~ .) +
-  theme_bw()
-```
-
-```{r, echo = F, eval = F}
-Metrics::mse(val1$value, val1$pred)
-Metrics::mse(train1$value, train1$pred)
-
-Metrics::mse(val2$value, val2$pred)
-Metrics::mse(train2$value, train2$pred)
-
-Metrics::mse(val3$value, val3$pred)
-Metrics::mse(train3$value, train3$pred)
-
-Metrics::mse(val4$value, val4$pred)
-Metrics::mse(train4$value, train4$pred)
-
-Metrics::mse(val5$value, val5$pred)
-Metrics::mse(train5$value, train5$pred)
-
-Metrics::mse(val6$value, val6$pred)
-Metrics::mse(train6$value, train6$pred)
-
-Metrics::mse(val1_ts$value, val1_ts$pred)
-Metrics::mse(train1_ts$value, train1_ts$pred)
-
-Metrics::mse(val2_ts$value, val2_ts$pred)
-Metrics::mse(train2_ts$value, train2_ts$pred)
-
-Metrics::mse(val3_ts$value, val3_ts$pred)
-Metrics::mse(train3_ts$value, train3_ts$pred)
-
-Metrics::mse(val4_ts$value, val4_ts$pred)
-Metrics::mse(train4_ts$value, train4_ts$pred)
+# ggplot(val1_ts, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val2_ts, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val3_ts, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
+# 
+# ggplot(val4_ts, aes(x = date, y = value)) +
+#   geom_point() +
+#   geom_point(aes(y = pred), color = 'orange') +
+#   facet_grid(feature ~ .) +
+#   theme_bw()
 ```
 
 ### Hyper-parameter tuning
@@ -522,16 +246,7 @@ Metrics::mse(train4_ts$value, train4_ts$pred)
 Current settings:
 
 ```{python}
-settings = {
-    "hiddens": [3, 3],
-    "activations": ["relu", "relu"],
-    "learning_rate": 0.001,
-    "random_seed": 57,
-    "max_epochs": 1000,
-    "batch_size": 32,
-    "patience": 10,
-    "dropout_rate": 0,
-}
+#settings["basic"]
 ```
 
 <!-- ### Hindcasting application -->

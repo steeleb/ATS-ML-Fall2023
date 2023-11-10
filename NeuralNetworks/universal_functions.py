@@ -52,15 +52,15 @@ def predict_values(model, features, val_features, labels, val_labels, t_mean, t_
     val = model.predict(val_features)
     p_act = calculate_vals(pred, t_mean, t_std)
     l_act = calculate_vals(labels, t_mean, t_std)
-    v_act = calculate_vals(val, t_mean, t_std)
+    p_v_act = calculate_vals(val, t_mean, t_std)
     l_v_act = calculate_vals(val_labels, t_mean, t_std)
-    return p_act, l_act, v_act, l_v_act
+    return p_act, l_act, p_v_act, l_v_act
 
-def print_error_metrics(dataset_num, l_act, p_act, l_v_act, v_act):
+def print_error_metrics(dataset_num, l_act, p_act, l_v_act, p_v_act):
     t_mse = mean_squared_error(l_act, p_act)
     t_mae = mean_absolute_error(l_act, p_act)
-    v_mse = mean_squared_error(l_v_act, v_act)
-    v_mae = mean_absolute_error(l_v_act, v_act)
+    v_mse = mean_squared_error(l_v_act, p_v_act)
+    v_mae = mean_absolute_error(l_v_act, p_v_act)
     print("DATASET", dataset_num)
     print("Mean Squared Error for Training Dataset", dataset_num, ":", t_mse)
     print("Mean Absolute Error for Training Dataset", dataset_num, ":", t_mae)

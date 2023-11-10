@@ -32,6 +32,7 @@ surf_temp <- NW_temp %>%
   filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
                         'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
   filter(date < ymd("2023-01-01"))
+
   
 NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
   rename(feature = GNIS_Name) %>% 
