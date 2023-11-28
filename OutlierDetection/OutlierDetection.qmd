@@ -1,0 +1,38 @@
+---
+title: "Outlier Detection for RS-Derived Surface Water Temperature Estimates"
+author: "B. Steele"
+date: today
+date-format: long
+editor: 
+  visual:
+    theme: sky
+editor-options:
+  markdown:
+    wrap: 80
+format: pdf
+jupyter: python3
+bilbliography:
+  references.bib
+---
+
+[GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
+
+# Scientific Motivation and Problem Statement
+
+We use the Landsat Collection 2 surface temperature (ST) product to create a more robust dataset for our analyses, supplementing the manually-measured surface temeperature at lakes monitored by Northern Water. The product performs particularly poorly when clouds are present or even near the area of interest - instances of this tend to result in lower-than-expected (or measured) temperature values, even though the associated metadata does not indicate that there are clouds near or at the location of interest. Additionally, the thermal sensor on the Landsat constellation has a native resolution of 100m, and we mask the data at 30m (the resolution of the optical sensors, where we determine water extent). Because the reservoirs we are interested in obtaining surface temperature for are dynamic, it is possible we are inadvertantly including land-contaminated pixels in the summary of the area of interest. Since the final goal of modeling daily surface temperature is to launch a real-time decision support system, it is imperative that we don't include contaminated data into our pipeline since these data are the foundational building blocks for other optically-derived parameter estimates we will be modeling.
+
+In an attempt to identify outliers/novel data points, I will using an autoencoder trained on the *in situ* data to calculate thresholds for outlier detection (like the avalanche example).
+
+# Description of the Data
+
+## Data preprocessing
+
+## Training/Validation/Testing Split
+
+# ML setup
+
+## Hyperparameters
+
+# Results
+
+# Conclusions
