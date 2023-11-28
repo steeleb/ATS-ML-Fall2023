@@ -1,5 +1,5 @@
 ---
-title: "Outlier Detection for RS-Derived Surface Water Temperature Estimates"
+title: "Outlier Detection for RS-Derived Surface Water Temperature Estimates Using A Variational Autoencoder Method"
 author: "B. Steele"
 date: today
 date-format: long
@@ -10,28 +10,157 @@ editor-options:
   markdown:
     wrap: 80
 format: pdf
-jupyter: python3
 bilbliography:
   references.bib
+bibliography: references.bib
 ---
 
 [GH Repo](https://github.com/steeleb/ATS-ML-Fall2023)
 
+```{r envSetup, echo=FALSE, message=FALSE}
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+library(Metrics)
+library(ggpmisc)
+library(ggthemes)
+
+# activate conda env
+use_condaenv('~/miniconda3/envs/env_ATSML/')
+
+# data directory
+dir = "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/"
+```
+
+```{python importModules}
+#| echo: false
+#| message: false
+#| include: false
+
+import os
+import sys
+import imp
+import numpy as np
+import seaborn as sb
+import pickle
+import pandas as pd
+import datetime
+import tensorflow as tf
+import sklearn
+import matplotlib.pyplot as plt
+
+# custom modules
+this_dir = "/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/"
+```
+
+## Questions:
+
+-   how do I create a baseline for this type of application?
+
+-   
+
 # Scientific Motivation and Problem Statement
 
-We use the Landsat Collection 2 surface temperature (ST) product to create a more robust dataset for our analyses, supplementing the manually-measured surface temeperature at lakes monitored by Northern Water. The product performs particularly poorly when clouds are present or even near the area of interest - instances of this tend to result in lower-than-expected (or measured) temperature values, even though the associated metadata does not indicate that there are clouds near or at the location of interest. Additionally, the thermal sensor on the Landsat constellation has a native resolution of 100m, and we mask the data at 30m (the resolution of the optical sensors, where we determine water extent). Because the reservoirs we are interested in obtaining surface temperature for are dynamic, it is possible we are inadvertantly including land-contaminated pixels in the summary of the area of interest. Since the final goal of modeling daily surface temperature is to launch a real-time decision support system, it is imperative that we don't include contaminated data into our pipeline since these data are the foundational building blocks for other optically-derived parameter estimates we will be modeling.
+![Remote sensing-enhanced lake surface temeperature record for the seven manually-monitored Northern Water waterbodies. Manually-measured surface temperature represented by black translucent dots, remote-sensing derived values are in gold translucent dots.](images/is_rs_surface_temp_v2023-11-28.png "Figure 1"){#fig-enhancedRecord width="500"}
 
-In an attempt to identify outliers/novel data points, I will using an autoencoder trained on the *in situ* data to calculate thresholds for outlier detection (like the avalanche example).
+We use the Landsat Collection 2 surface temperature (ST) product [@cook2014] to create a more robust dataset for our analyses, supplementing the manually-measured surface temeperature at lakes monitored by Northern Water (see @fig-enhancedRecord). The product performs particularly poorly when clouds are present or even near the area of interest - instances of this tend to result in lower-than-expected (or measured) temperature values, even though the associated metadata does not indicate that there are clouds near or at the location of interest. Additionally, the thermal sensor on the Landsat constellation has a native resolution of 100m, and we mask the data at 30m (the resolution of the optical sensors, where we determine water extent). Because the reservoirs we are interested in obtaining surface temperature for are dynamic, it is possible we are inadvertantly including land-contaminated pixels in the summary of the area of interest. Since the final goal of modeling daily surface temperature is to launch a real-time decision support system, it is imperative that we don't include contaminated data into our pipeline since these data are the foundational building blocks for other optically-derived parameter estimates we will be modeling.
+
+In an attempt to identify outliers/novel data points from the remote sensing data, I will using a variational autoencoder (VAE) trained on the *in situ* temperature measurements and associated data to establish thresholds for outlier detection for the ST product at lakes where we have measured, *in situ* data.
 
 # Description of the Data
 
+```{r loadData, echo = F, message = F}
+is_dir = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
+surf_temp <- read_csv(file.path(is_dir, 'manual_temperature_data_NW_harmonized_v2023-08-30.csv')) %>% 
+  group_by(date, feature) %>% 
+  arrange(depth) %>% 
+  slice(1) %>% 
+  filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
+                        'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
+  filter(date < ymd("2023-01-01"))
+
+rs_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-11-28.csv')) %>% 
+  rename(feature = GNIS_Name) %>% 
+  mutate(value = adj_medTemp,
+         feature = case_when(feature == 'Lake Granby' ~ 'Granby Reservoir',
+                             feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
+                             feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
+                             TRUE ~ feature),
+         station = 'sat') %>% 
+  filter(location_type == 'poi_center')
+
+NW_obs_est <- NW_estimates %>% filter(feature %in% unique(surf_temp$feature))
+
+same_day <- NW_estimates %>% 
+  rename(est_value = value) %>% 
+  select(-station) %>% 
+  inner_join(., surf_temp)
+
+same_day_lm <- lm(same_day$est_value ~ same_day$value)
+
+same_day$residuals <- resid(same_day_lm)
+
+same_day_rmse <- round(rmse(same_day$value, same_day$est_value), 2)
+same_day_mae <- round(mae(same_day$value, same_day$est_value), 2)
+
+n_gt_mae <- same_day %>% 
+  filter(residuals > same_day_mae) %>% 
+  nrow()
+```
+
+Northern Water, the municipal subdistrict that delivers drinking water to approximately 1 million people in northern Colorado and irrigation water for \~600,000 acres of land has an exhaustive manual measurement record for many of the lakes within their network. The manual sampling record contains `r nrow(surf_temp)` surface temperature measurements from `r length(unique(surf_temp$feature))` lakes. 'Surface temperature' in the manual sampling record is defined as any measured temperature at ≤ 1m depth. I retain only the top-most value when multiple measurements were available. The data from Landsat 4-9's surface temperature product contains `r nrow(NW_obs_est)` observations for these same lakes. While these thermal estimates are well-aligned with the manual monitoring data and have been bias-corrected (RMSE `r same_day_rmse`ºC, MAE `r same_day_mae`ºC., @figSameDay), there are still outliers when comparing these data with same-day measured surface temperature. Furthermore, these only represent `r nrow(same_day)` of the `r nrow(NW_obs_est)` remotely-sensed values within these seven reservoirs, and `r n_gt_mae` have residuals greater than the MAE for this subset.
+
+```{r figSameDay, echo=FALSE,fig.cap="Preliminary calibrated Landsat-derived surface temperature where same-day *in situ* measurements available (n = 63). Note obvious outliers at Willow Creek Reservoir (dark blue, Carter Lake(black), Windy Gap Reservoir (red) that require further investigation into QA/QC before integration into decision support system pipeline."}
+ggplot(same_day, aes(x = value, y = est_value)) + 
+  geom_abline(slope = 1, intercept = 0, lty = 2, color = 'grey') +
+  # geom_abline(slope = lm_loc_subset_adj$coefficients[2], intercept = lm_loc_subset_adj$coefficients[1], lty = 3, color = 'black') +
+    stat_poly_eq(aes(label =  paste(after_stat(adj.rr.label))),
+               formula = y~x, parse = TRUE,
+               label.y = Inf, vjust = 1.3) +
+  geom_point(aes(color = feature)) +
+  coord_cartesian(xlim = c(0, 27),
+                  ylim = c(0, 27)) +
+  theme_bw() +
+  labs(x = 'Manually-Measured Surface Temperature (°C)',
+       y = 'Adjusted Remotely-Sensed\nSurface Temperature (°C)',
+       title = 'Northern Water Waterbody/Remote Sensing\nPreliminary Temperature Product',
+       subtitle = 'Grey dashed line is 1:1', 
+       color = NULL) +
+  theme(#legend.position = 'bottom', 
+        plot.title = element_text(hjust = 0.5, face = 'bold'),
+        plot.subtitle = element_text(hjust = 0.5)) +
+  guides(color=guide_legend(ncol = 1, byrow=TRUE)) +
+    scale_color_colorblind()
+```
+
+The features that I will be using to train and validate this VAE for outlier detection are surface temperature, summarized NLDAS meteorological data (air temperature, precipitation, solar radiation, and wind), and static values for each of the reservoirs (elevation, surface area, maximum depth, volume, and shoreline distance). The NLDAS data have been summarized for the previous day's weather, 3 days prior, and 5 days prior - meaning, the model does not use *today's* weather for prediction. To capture annual warming and seasonal warm-up/cool-down, which are not always consistent between annual cycles, I've implemented an annual cumulative sum for both temperature and solar radiation and the day of year within the feature set. Because static features are incomplete for Windy Gap Reservoir, data from that reservoir is not included in this analysis.
+
+The training set will include all `r nrow(NW_obs_est)` measurements from the NW record in the six reservoirs with complete feature sets. These data are reliable and should adequately train the VAE to reconstruct the data from patterns in the latent space that are inherent to the feature set. The validation set to calculate a threshold for outliers will be the `r nrow(same_day)`, where instances where the residual is less than MAE are defined as *inliers* and those greater than MAE are *outliers*. An analysis of the reconstruction error will be used to define a threshold for *inliers* and *outliers* as described in @sinha2021.
+
 ## Data preprocessing
 
-## Training/Validation/Testing Split
+-   transform to more normally-distributed
+
+-   standardize data for NN architecture
 
 # ML setup
 
+Use VAE setup from pg 657-658 in text; overfit to training (if that's even possible!)
+
+Loss function is variation autoencoder's latent loss:
+
+$$
+\mathscr{L} = - \frac{1}2 \sum^n_{i=1}\biggr[1+log(\sigma_i^2)-\sigma_i^2-\mu_i^2\biggr]
+$$
+
 ## Hyperparameters
+
+Codings size - there are few input features, so this should probably be small, like 2-5.
+
+activation function - relu or leaky relu - used leaky in NN assignment, might stay with that?
+
+n layers, number of neurons per layer
 
 # Results
 
