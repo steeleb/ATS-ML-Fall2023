@@ -115,51 +115,51 @@ val5 = training.loc[training['feature'] == 'Carter Lake']
 
 train6 = training.loc[training['feature'] != 'Willow Creek Reservoir']
 val6 = training.loc[training['feature'] == 'Willow Creek Reservoir']
-# 
-# # and now save these all as pickle files
-# def save_df_as_pickle(df, file_name, file_path=''):
-#     """
-#     Save a pandas dataframe as a pickle file.
-#     
-#     Parameters:
-#     df (pandas.DataFrame): The dataframe to be saved.
-#     file_name (str): The name of the file to be saved.
-#     file_path (str): The path to the folder where the file will be saved.
-#     
-#     Returns:
-#     None
-#     """
-#     with open(os.path.join(file_path, file_name), 'wb') as f:
-#         pickle.dump(df, f)
-# 
-# # list of dataframes to save as pickle files with file names
-# list_ts_dfs = [[train1_ts, "train1_ts"],
-#                [val1_ts, "val1_ts"],
-#                [train2_ts, "train2_ts"],
-#                [val2_ts, "val2_ts"],
-#                [train3_ts, "train3_ts"],
-#                [val3_ts, "val3_ts"],
-#                [train4_ts, "train4_ts"],
-#                [val4_ts, "val4_ts"]]
-# 
-# list_dfs = [[train1, "train1"],
-#             [val1, "val1"],
-#             [train2, "train2"],
-#             [val2, "val2"],
-#             [train3, "train3"],
-#             [val3, "val3"],
-#             [train4, "train4"],
-#             [val4, "val4"],
-#             [train5, "train5"],
-#             [val5, "val5"],
-#             [train6, "train6"],
-#             [val6, "val6"]]
-# 
-# # map the function save_df_as_pickle across the list of dataframes list_ts_dfs and list_dfs
-# for df, name in list_ts_dfs:
-#     file_name = f"{name}.pkl"
-#     save_df_as_pickle(df, file_name, "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/pickles/")
-# 
-# for df, name in list_dfs:
-#     file_name = f"{name}.pkl"
-#     save_df_as_pickle(df, file_name, "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/pickles/")
+
+# and now save these all as pickle files
+def save_df_as_pickle(df, file_name, file_path=''):
+    """
+    Save a pandas dataframe as a pickle file.
+
+    Parameters:
+    df (pandas.DataFrame): The dataframe to be saved.
+    file_name (str): The name of the file to be saved.
+    file_path (str): The path to the folder where the file will be saved.
+
+    Returns:
+    None
+    """
+    with open(os.path.join(file_path, file_name), 'wb') as f:
+        pickle.dump(df, f)
+
+# list of dataframes to save as pickle files with file names
+list_ts_dfs = [[train1_ts, "train1_ts"],
+               [val1_ts, "val1_ts"],
+               [train2_ts, "train2_ts"],
+               [val2_ts, "val2_ts"],
+               [train3_ts, "train3_ts"],
+               [val3_ts, "val3_ts"],
+               [train4_ts, "train4_ts"],
+               [val4_ts, "val4_ts"]]
+
+list_dfs = [[train1, "train1"],
+            [val1, "val1"],
+            [train2, "train2"],
+            [val2, "val2"],
+            [train3, "train3"],
+            [val3, "val3"],
+            [train4, "train4"],
+            [val4, "val4"],
+            [train5, "train5"],
+            [val5, "val5"],
+            [train6, "train6"],
+            [val6, "val6"]]
+
+# map the function save_df_as_pickle across the list of dataframes list_ts_dfs and list_dfs
+for df, name in list_ts_dfs:
+    file_name = f"{name}.pkl"
+    save_df_as_pickle(df, file_name, "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/pickles/")
+
+for df, name in list_dfs:
+    file_name = f"{name}.pkl"
+    save_df_as_pickle(df, file_name, "/Users/steeleb/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/pickles/")

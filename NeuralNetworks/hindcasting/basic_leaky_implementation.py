@@ -18,7 +18,7 @@ import matplotlib.colors as colors
 # custom modules
 this_dir = "/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/"
 
-imp.load_source("universals", os.path.join(this_dir, "NeuralNetworks/universal_functions.py"))
+imp.load_source("universals", os.path.join(this_dir, "universal_functions.py"))
 from universals import load_pickle_file, get_features_labels_test, predict_values_test, print_error_metrics
 
 # import test data
