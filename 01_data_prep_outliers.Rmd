@@ -31,7 +31,7 @@ surf_temp <- NW_temp %>%
   slice(1) %>% 
   filter(station %in% c('CL-DAM1', 'GR-DAM', 'GL-MID', 'HT-DIX', 
                         'SM-DAM', 'WC-DAM', 'WG-DAM')) %>%
-  filter(date < ymd("2023-01-01"))
+  filter(date < ymd("2023-01-01")) 
 
   
 NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-09-28.csv')) %>% 
@@ -42,7 +42,7 @@ NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2023-09-2
                              feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
                              TRUE ~ feature),
          station = 'sat') %>% 
-  filter(location_type == 'poi_center')
+  filter(location_type == 'poi_center', date < ymd("2023-01-01"))
 
 all_NW_temp <- full_join(surf_temp, NW_estimates)
 
@@ -73,12 +73,12 @@ static <- read_csv('~/OneDrive - Colostate/NASA-Northern/data/static_vars/static
 # join together for full dataset
 full_dataset = left_join(static, all_NW_temp) %>%
   left_join(., met_cumulative_sum) %>%
-  left_join(., weather) %>%
-  mutate(month = month(date)) %>%
+  left_join(., weather) %>% 
+  mutate(month = month(date)) %>% 
   filter(between(month, 4, 10)) %>%
   select(-c(med_SurfaceTemp, adj_medTemp, depth, time, parameter, month,
-            station, Latitude, Longitude, lakeID, HarmonizedName,
-            location_type, mission)) %>%
+            Latitude, Longitude, lakeID, HarmonizedName, mission,
+            location_type)) %>%
   arrange(date) %>%
   filter(complete.cases(.))
 
@@ -88,20 +88,34 @@ full_dataset <- full_dataset %>%
   mutate(day_of_year = yday(date))
 
 ```
+
 ## Make train-val-test sets
 
 Test data will be from 2021 forward (2y of data)
 
 ```{r, test-r}
+# pull out test set (2021-01-01 forward)
 test <- full_dataset %>% 
-  filter(date >= ymd('2021-01-01'))
+  filter(date >= ymd('2021-01-01')) 
+# and then the manual data from that set
+test_manual <- test %>% 
+  filter(station != "sat")
 
-write_csv(test, file.path(nn_dir, paste0('test_set_2021_forward_v', Sys.Date(), '.csv')))
-```
+write_csv(test_manual, file.path(nn_dir, paste0('test_set_manual_2021_forward_v', Sys.Date(), '.csv')))
 
-```{r, training_set}
 #full training set
 training <- anti_join(full_dataset, test)
 
-write_csv(training, file.path(nn_dir, paste0('training_set_up_to_2021_v', Sys.Date(), '.csv')))
+#subset to manual data only
+training_manual <- training %>% 
+  filter(station != "sat")
+
+write_csv(training_manual, file.path(nn_dir, paste0('training_set_manual_up_to_2021_v', Sys.Date(), '.csv')))
+
+# and the sat dataset
+sat_dataset <- full_dataset %>% 
+  filter(station == "sat")
+
+write_csv(sat_dataset, file.path(nn_dir, paste0("sat_dataset_v", Sys.Date(), ".csv")))
 ```
+

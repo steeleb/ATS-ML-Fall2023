@@ -11,7 +11,7 @@ import pickle
 file_path = os.path.expanduser("~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/")
 
 # import training data
-fn = os.path.join(file_path, "training_set_up_to_2021_v2023-12-10.csv")
+fn = os.path.join(file_path, "training_set_manual_up_to_2021_v2023-12-10.csv")
 with open(fn) as f:
     df = pd.read_csv(f, sep=',')
 
@@ -46,7 +46,7 @@ def standardize_column(df, col_name):
 # apply standardize_column function to all columns of df
 # but first, drop the feature column
 df_short = df.copy()
-df_short = df_short.drop(columns=['feature', 'date'])
+df_short = df_short.drop(columns=['feature', 'date', 'station'])
 # and then apply the standardization function
 df_standardized = df_short.apply(lambda col: standardize_column(df_short, col.name))
 
@@ -69,34 +69,7 @@ training = df_standardized.copy()
 training = training.join(df[['feature', 'date']])
 
 # now, we'll split the data into training and validation sets.
-### I'm going to do this two ways:
-### 1) by timeseries
-### 2) by LOO by lake
 
-# 1) by timeseries
-
-# filter training dataframe by date range
-start_date_1 = '1984-01-01'
-end_date_1 = '1995-01-01'
-val1_ts = training.loc[training['date'].between(start_date_1, end_date_1)]
-train1_ts = training.merge(val1_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
-
-start_date_2 = end_date_1
-end_date_2 = '2005-01-01'
-val2_ts = training.loc[training['date'].between(start_date_2, end_date_2)]
-train2_ts = training.merge(val2_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
-
-start_date_3 = end_date_2
-end_date_3 = '2015-01-01'
-val3_ts = training.loc[training['date'].between(start_date_3, end_date_3)]
-train3_ts = training.merge(val3_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
-
-start_date_4 = end_date_3
-end_date_4 = '2021-01-01'
-val4_ts = training.loc[training['date'].between(start_date_4, end_date_4)]
-train4_ts = training.merge(val4_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
-
-# 2) by LOO by lake
 # using a leave-one-out method for train/validate
 train1 = training.loc[training['feature'] != 'Grand Lake']
 val1 = training.loc[training['feature'] == 'Grand Lake']
@@ -115,4 +88,3 @@ val5 = training.loc[training['feature'] == 'Carter Lake']
 
 train6 = training.loc[training['feature'] != 'Willow Creek Reservoir']
 val6 = training.loc[training['feature'] == 'Willow Creek Reservoir']
-

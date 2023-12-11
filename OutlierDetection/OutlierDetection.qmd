@@ -53,12 +53,6 @@ import matplotlib.pyplot as plt
 this_dir = "/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/"
 ```
 
-## Questions:
-
--   how do I create a baseline for this type of application?
-
--   
-
 # Scientific Motivation and Problem Statement
 
 ![Remote sensing-enhanced lake surface temeperature record for the seven manually-monitored Northern Water waterbodies. Manually-measured surface temperature represented by black translucent dots, remote-sensing derived values are in gold translucent dots.](images/is_rs_surface_temp_v2023-11-28.png "Figure 1"){#fig-enhancedRecord width="500"}
