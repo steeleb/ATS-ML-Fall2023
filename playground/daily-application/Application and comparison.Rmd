@@ -1,0 +1,142 @@
+---
+title: "Collate and Visualize the daily temp data with buoy data"
+author: "ROSSyndicate"
+date: "2023-12-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggthemes)
+
+app_dir = "~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/application/"
+```
+
+Read in the collated weather data and the predictions and join them by rowid
+
+```{r}
+app_data <- read_csv(file.path(app_dir, "application_dataset_2020-2022_apr-nov.csv")) %>% 
+  rowid_to_column()
+
+pred_data <- read_csv(file.path(app_dir, "model_predictions_2020-2022_apr-nov.csv")) %>% 
+  rowid_to_column() %>% 
+  select(-"...1")
+
+app_pred <- full_join(app_data, pred_data)
+```
+
+Summarize the model output to a single value
+
+```{r}
+pred_vars = names(pred_data)[names(pred_data) != "rowid"]
+app_pred_light <- app_pred %>% 
+  select(date, lake, all_of(pred_vars)) %>% 
+  pivot_longer(cols = all_of(pred_vars),
+               names_to = "model", 
+               values_to = "value") %>% 
+  group_by(date, lake) %>% 
+  summarise(est_temp = mean(value),
+         std_temp = sd(value)) %>% 
+  ungroup() %>% 
+  select(date, lake, est_temp, std_temp)
+```
+
+Grab just SMR
+
+```{r}
+sm_pred <- app_pred_light %>% 
+  filter(lake == "Shadow Mountain Reservoir")
+```
+
+```{r}
+ggplot(sm_pred, aes(x = date, y = est_temp)) +
+  geom_point()
+```
+
+And pull in SMR buoy data
+
+```{r}
+SMM <- read_csv("~/Desktop/SMM_file_quick.csv") %>% 
+  filter(parameter == "temp_C",
+         between(year(dateTime), 2020, 2022),
+         between(month(dateTime), 4, 11),
+         depth_m <= 1, 
+         between(hour(dateTime), 10, 14))
+
+SMM_daily <- SMM %>% 
+  mutate(date = date(dateTime)) %>% 
+  group_by(date) %>% 
+  summarise(mean_midday_temp = mean(value)) %>% 
+  ungroup()
+
+```
+
+Join together
+
+```{r}
+SMM_full <- full_join(sm_pred, SMM_daily) %>% 
+  rename("SMR-MID buoy" = mean_midday_temp,
+         hindcast = est_temp) %>% 
+  pivot_longer(cols = c("SMR-MID buoy", hindcast),
+               names_to = "data source",
+               values_to = "temp_C") 
+```
+
+
+Plot
+
+```{r}
+ggplot(SMM_full, aes(x = date, y = temp_C, color = `data source`)) +
+  geom_point(alpha = 0.4) +
+  scale_color_colorblind() +
+  labs(x = NULL,
+       y = "Shadow Mountain surface temperature (deg C)") +
+  theme_bw() +
+  theme(legend.position = 'bottom')
+
+ggsave(file.path(app_dir, "SMM_hindcast_spin_up.png"), width = 6, height = 4, dpi = 300, units = "in")
+```
+
+Do the same for SMR-DAM
+
+```{r}
+SMD <- read_csv("~/Desktop/SMD_file_quick.csv") %>% 
+  filter(parameter == "temp_C",
+         between(year(dateTime), 2020, 2022),
+         between(month(dateTime), 4, 11),
+         depth_m <= 1, 
+         between(hour(dateTime), 10, 14))
+
+SMD_daily <- SMD %>% 
+  mutate(date = date(dateTime)) %>% 
+  group_by(date) %>% 
+  summarise(mean_midday_temp = mean(value)) %>% 
+  ungroup()
+
+```
+
+Join together
+
+```{r}
+SMD_full <- full_join(sm_pred, SMD_daily) %>% 
+  rename("SMR-DAM buoy" = mean_midday_temp,
+         hindcast = est_temp) %>% 
+  pivot_longer(cols = c("SMR-DAM buoy", hindcast),
+               names_to = "data source",
+               values_to = "temp_C") 
+```
+
+
+Plot
+
+```{r}
+ggplot(SMD_full, aes(x = date, y = temp_C, color = `data source`)) +
+  geom_point(alpha = 0.4) +
+  scale_color_colorblind() +
+  labs(x = NULL,
+       y = "Shadow Mountain surface temperature (deg C)") +
+  theme_bw() +
+  theme(legend.position = 'bottom')
+```
