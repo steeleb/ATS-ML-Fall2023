@@ -1,0 +1,64 @@
+---
+title: "Prep data for application 2020-2023"
+author: "ROSSyndicate"
+date: "2023-12-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+
+# file paths
+clim_dir = '~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/'
+res_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/'
+stat_dir = "~/OneDrive - Colostate/NASA-Northern/data/static_vars/"
+```
+
+Read in files
+
+```{r}
+clim_agg <- read_csv(file.path(clim_dir, "NW_NLDAS_climate_1-3-5d_previous_1984-01-01_2023-05-17_v2023-11-08.csv")) %>% 
+  filter(between(date, ymd("2020-01-01"), ymd("2022-12-31")),
+         between(month(date), 4, 11)) %>% 
+  mutate(lake = if_else(lake == "Lake Granby",
+                        "Granby Reservoir", 
+                        lake)) %>% 
+  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
+                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
+                        'mean_wind_mps', 'max_wind_mps'),
+               names_to = 'variable') %>% 
+  pivot_wider(names_from = c('variable', 'n_prev_days'),
+              names_sep = '_',
+              values_from = 'value')
+
+clim_cumsum <- read_csv(file.path(clim_dir, "NW_NLDAS_climate_cumulative_sums_annual_1984-01-01_2023-05-17v2023-11-08.csv")) %>% 
+  filter(between(date, ymd("2020-01-01"), ymd("2022-12-31")),
+         between(month(date), 4, 11))%>% 
+  mutate(lake = if_else(lake == "Lake Granby",
+                        "Granby Reservoir", 
+                        lake))
+
+static <- read_csv(file.path(stat_dir, "static_vars_7_lakes.csv")) %>% 
+  filter(complete.cases(.)) %>% 
+  rename(lake = feature) 
+```
+
+Collate and prep the dataset for application
+
+```{r}
+app_dataset <- left_join(static, clim_agg) %>% 
+  left_join(., clim_cumsum) %>% 
+  mutate(day_of_year = yday(date))
+```
+
+Save the file!
+
+```{r}
+write_csv(app_dataset, file.path(nn_dir, "application/application_dataset_2020-2022_apr-nov.csv"))
+```
+
