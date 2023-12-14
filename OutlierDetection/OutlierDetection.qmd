@@ -59,7 +59,9 @@ this_dir = "/Users/steeleb/Documents/GitHub/ATS-ML-Fall2023/"
 
 We use the Landsat Collection 2 surface temperature (ST) product [@cook2014] to create a more robust dataset for our analyses, supplementing the manually-measured surface temeperature at lakes monitored by Northern Water (see @fig-enhancedRecord). The product performs particularly poorly when clouds are present or even near the area of interest - instances of this tend to result in lower-than-expected (or measured) temperature values, even though the associated metadata does not indicate that there are clouds near or at the location of interest. Additionally, the thermal sensor on the Landsat constellation has a native resolution of 100m, and we mask the data at 30m (the resolution of the optical sensors, where we determine water extent). Because the reservoirs we are interested in obtaining surface temperature for are dynamic, it is possible we are inadvertantly including land-contaminated pixels in the summary of the area of interest. Since the final goal of modeling daily surface temperature is to launch a real-time decision support system, it is imperative that we don't include contaminated data into our pipeline since these data are the foundational building blocks for other optically-derived parameter estimates we will be modeling.
 
-In an attempt to identify outliers/novel data points from the remote sensing data, I will using a variational autoencoder (VAE) trained on the *in situ* temperature measurements and associated data to establish thresholds for outlier detection for the ST product at lakes where we have measured, *in situ* data.
+In an attempt to identify outliers/novel data points from the remote sensing data, I will using a variational autoencoder (VAE) trained on the *in situ* temperature measurements and associated data to establish thresholds for outlier detection for the ST product at lakes where we have measured, *in situ* data. While this method is typically used on raster-type data in conjunction with convolutional neural networks, I'm hopeful that implementation could be similar on vector data since the input data, at some point in the VAE architecture are flattened to vector-like data.
+
+The baseline for this implementation is the results of the previous neural network framework, where the daily model performance had an MAE of 1.8 and a RMSE of 2.2 degrees Celsius. If we feed only the remote sensing data which passes the variational autencoder threshold test and the MAE and RMSE decrease, we will consider this method to perform better than baseline.
 
 # Description of the Data
 
@@ -103,9 +105,9 @@ n_gt_mae <- same_day %>%
   nrow()
 ```
 
-Northern Water, the municipal subdistrict that delivers drinking water to approximately 1 million people in northern Colorado and irrigation water for \~600,000 acres of land has an exhaustive manual measurement record for many of the lakes within their network. The manual sampling record contains `r nrow(surf_temp)` surface temperature measurements from `r length(unique(surf_temp$feature))` lakes. 'Surface temperature' in the manual sampling record is defined as any measured temperature at ≤ 1m depth. I retain only the top-most value when multiple measurements were available. The data from Landsat 4-9's surface temperature product contains `r nrow(NW_obs_est)` observations for these same lakes. While these thermal estimates are well-aligned with the manual monitoring data and have been bias-corrected (RMSE `r same_day_rmse`ºC, MAE `r same_day_mae`ºC., @figSameDay), there are still outliers when comparing these data with same-day measured surface temperature. Furthermore, these only represent `r nrow(same_day)` of the `r nrow(NW_obs_est)` remotely-sensed values within these seven reservoirs, and `r n_gt_mae` have residuals greater than the MAE for this subset.
+Northern Water, the municipal subdistrict that delivers drinking water to approximately 1 million people in northern Colorado and irrigation water for \~600,000 acres of land has an exhaustive manual measurement record for many of the lakes within their network. The manual sampling record contains `r nrow(surf_temp)` surface temperature measurements from `r length(unique(surf_temp$feature))` lakes. 'Surface temperature' in the manual sampling record is defined as any measured temperature at ≤ 1m depth. I retain only the top-most value when multiple measurements were available. The data from Landsat 4-9's surface temperature product contains `r nrow(NW_obs_est)` observations for these same lakes. While these thermal estimates are well-aligned with the manual monitoring data and have been bias-corrected (RMSE `r same_day_rmse`ºC, MAE `r same_day_mae`ºC., Figure 2), there are still outliers when comparing these data with same-day measured surface temperature. Furthermore, these only represent `r nrow(same_day)` of the `r nrow(NW_obs_est)` remotely-sensed values within these seven reservoirs, and `r n_gt_mae` have residuals greater than the MAE for this subset.
 
-```{r figSameDay, echo=FALSE,fig.cap="Preliminary calibrated Landsat-derived surface temperature where same-day *in situ* measurements available (n = 63). Note obvious outliers at Willow Creek Reservoir (dark blue, Carter Lake(black), Windy Gap Reservoir (red) that require further investigation into QA/QC before integration into decision support system pipeline."}
+```{r figSameDay, echo=FALSE, fig.cap="Preliminary calibrated Landsat-derived surface temperature where same-day *in situ* measurements available (n = 63). Note obvious outliers at Willow Creek Reservoir (dark blue, Carter Lake(black), Windy Gap Reservoir (red) that require further investigation into QA/QC before integration into decision support system pipeline."}
 ggplot(same_day, aes(x = value, y = est_value)) + 
   geom_abline(slope = 1, intercept = 0, lty = 2, color = 'grey') +
   # geom_abline(slope = lm_loc_subset_adj$coefficients[2], intercept = lm_loc_subset_adj$coefficients[1], lty = 3, color = 'black') +
@@ -134,28 +136,36 @@ The training set will include all `r nrow(NW_obs_est)` measurements from the NW 
 
 ## Data preprocessing
 
--   transform to more normally-distributed
+All NLDAS precipitation data are right skewed heavily biased to low precip values including zero, to account for this and make the distribution more normal, I added 0.0001 to each value and applied a log-10 transformation to this subset. The wind data were left skewed and to transform the distribution, I used a square root transformation. All features and labels were then scaled using the mean and standard deviation from the training dataset to get the values closer around zero, which are preferable for neural networks. This is the same preprocessing that was used in the neural networks assignment.
 
--   standardize data for NN architecture
+## Training-Validation-Test Splits
 
-# ML setup
+Fort the autoencoder implementation, I used a leave-one-out training/validation split, where each lake was iteratively left out of the model development, creating 6 models. The test data are those from 2021 forward.
 
-Use VAE setup from pg 657-658 in text; overfit to training (if that's even possible!)
+For development of the threshold cutoff, I used the instances of same-day *in situ* measurements and remote sensing values shown in Figure 2. For training-validation, I'll use the same leave-one-out technique, and if the threshold is similar across training/validation datasets, I will unify the data and create a more robust threshold model with all data. There will be no 'test' set in this instance because of the small amount of data. Testing for this example would be through implementation of this VAE-defined threshold method.
 
-Loss function is variation autoencoder's latent loss:
+# Autoencoder Setup
+
+The set up of this VAE was very conservative, using two fully connected dense layers for both the encoder and decoder with three codings for the latent space. Batch size was set to 32. The dense layers for the encoder were comprised of 20 then 10 nodes, the decoder comprised of 10 then 20 nodes all with *relu* activation. Input and reconstruction (output) layers contained 33 nodes, one for each standardized variable value. Linear activation was used for the reconstruction layer. To reduce overfitting, I also added a dropout layer with a dropout rate of 20% between the input and first dense layer.
+
+Loss function is for this VAE was the sum of the variational autoencoder's latent loss:
 
 $$
 \mathscr{L} = - \frac{1}2 \sum^n_{i=1}\biggr[1+log(\sigma_i^2)-\sigma_i^2-\mu_i^2\biggr]
 $$
 
-## Hyperparameters
+And reconstruction loss, which was mean squared error (MSE):
 
-Codings size - there are few input features, so this should probably be small, like 2-5.
-
-activation function - relu or leaky relu - used leaky in NN assignment, might stay with that?
-
-n layers, number of neurons per layer
+$$
+MSE = \sum_{i=1}^{n}(x_i-\hat{x}_i)^2
+$$
 
 # Results
 
-# Conclusions
+To determine if the model was performing as expected, I will examine the temperature values in the reconstruction for the test dataset. While the other parameters are important to the modeling effort, determining temperature outliers is the purpose of the implementation of the VAE. The reconstructed temperature values should be strongly linearly related to the input temperature values. Figure @fig-VAEtemp shows the resulting reconstructed, standardized temperature value (y) plotted against the actual standardized temperature value.
+
+# ![](images/loo_models_basic-03.png)Conclusions {#fig-VAEtemp}
+
+In hindsight, I think adding a weight to the reconstruction loss to add more weight divergence in temperature would have been particularily useful. Sadly, I've completely run out of time to make thoughtful conclusions! I am particularily interested to see how the VAE handles the outlier/inlier data and whether or not it does make a difference in the NN models. While I don't have time to add that here, I will send an update if/when I get to the point where I have actually gone through the entire application of the VAE for outlier detection.
+
+# Citations
