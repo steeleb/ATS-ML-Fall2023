@@ -59,8 +59,7 @@ And pull in SMR buoy data
 
 ```{r}
 SMM <- read_csv("~/Desktop/SMM_file_quick.csv") %>% 
-  filter(parameter == "temp_C",
-         between(year(dateTime), 2020, 2022),
+  filter(between(year(dateTime), 2020, 2022),
          between(month(dateTime), 4, 11),
          depth_m <= 1, 
          between(hour(dateTime), 10, 14))
@@ -68,7 +67,7 @@ SMM <- read_csv("~/Desktop/SMM_file_quick.csv") %>%
 SMM_daily <- SMM %>% 
   mutate(date = date(dateTime)) %>% 
   group_by(date) %>% 
-  summarise(mean_midday_temp = mean(value)) %>% 
+  summarise(mean_midday_temp = mean(temp_C)) %>% 
   ungroup()
 
 ```
@@ -97,6 +96,21 @@ ggplot(SMM_full, aes(x = date, y = temp_C, color = `data source`)) +
   theme(legend.position = 'bottom')
 
 ggsave(file.path(app_dir, "SMM_hindcast_spin_up.png"), width = 6, height = 4, dpi = 300, units = "in")
+```
+
+
+```{r}
+SMM_rmse = SMM_full %>% 
+  filter(!is.na(temp_C)) %>% 
+  filter(year(date) >= 2021) %>% 
+  pivot_wider(names_from = `data source`,
+              values_from = 'temp_C') %>% 
+  filter(!is.na(`SMR-MID buoy`)) %>% 
+  group_by(year(date)) %>% 
+  summarize(rmse = rmse(`SMR-MID buoy`, hindcast),
+            mae = mae(`SMR-MID buoy`, hindcast),
+            bias = bias(`SMR-MID buoy`, hindcast),
+            mape = mape(`SMR-MID buoy`, hindcast))
 ```
 
 Do the same for SMR-DAM

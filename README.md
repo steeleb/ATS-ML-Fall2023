@@ -10,6 +10,7 @@ Dr. Elizabeth Barnes, Colorado State University.
 - conda create --name env_ATSML python=3.10.10
 - conda activate env_ATSML
 - conda install -c apple -c conda-forge -c nodefaults tensorflow-deps
+- conda install tensorflow
 - python -m pip install tensorflow-macos==2.10.0
 - python -m pip install tensorflow-metal==0.6.0
 - pip install tensorflow-probability==0.15 silence-tensorflow
