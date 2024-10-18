@@ -8,10 +8,10 @@ import numpy as np
 from datetime import date
 import pickle
 
-file_path = os.path.expanduser("~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/")
+file_path = os.path.expanduser("~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/regional_daily_temp/")
 
 # import training data
-fn = os.path.join(file_path, "training_set_up_to_2021_v2023-12-10.csv")
+fn = os.path.join(file_path, "training_2022_v2024-10-18.csv")
 with open(fn) as f:
     df = pd.read_csv(f, sep=',')
 
@@ -92,7 +92,7 @@ val3_ts = training.loc[training['date'].between(start_date_3, end_date_3)]
 train3_ts = training.merge(val3_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
 
 start_date_4 = end_date_3
-end_date_4 = '2021-01-01'
+end_date_4 = '2022-01-01'
 val4_ts = training.loc[training['date'].between(start_date_4, end_date_4)]
 train4_ts = training.merge(val4_ts, how='outer', indicator=True).query('_merge=="left_only"').drop('_merge', axis=1)
 
@@ -113,6 +113,19 @@ val4 = training.loc[training['feature'] == 'Granby Reservoir']
 train5 = training.loc[training['feature'] != 'Carter Lake']
 val5 = training.loc[training['feature'] == 'Carter Lake']
 
-train6 = training.loc[training['feature'] != 'Willow Creek Reservoir']
-val6 = training.loc[training['feature'] == 'Willow Creek Reservoir']
+train6a = training.loc[training['feature'] != 'Willow Creek Reservoir']
+train6 = train6a.loc[train6a['feature'] != 'Windy Gap Reservoir']
+val6a = training.loc[training['feature'] == 'Willow Creek Reservoir']
+val6b = training.loc[training['feature'] == 'Windy Gap Reservoir']
+val6 = pd.concat([val6a, val6b])
+
+train7 = training.loc[training['feature'] != 'Lake Estes']
+val7 = training.loc[training['feature'] == 'Lake Estes']
+
+train8 = training.loc[training['feature'] != 'Boulder Reservoir']
+val8 = training.loc[training['feature'] == 'Boulder Reservoir']
+
+train9 = training.loc[training['feature'] != 'Green Mountain Reservoir']
+val9 = training.loc[training['feature'] == 'Green Mountain Reservoir']
+
 

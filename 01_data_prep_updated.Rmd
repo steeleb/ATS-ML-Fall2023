@@ -18,7 +18,7 @@ library(feather)
 # file paths
 is_dir = '~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/'
 rs_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
-nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/'
+nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/regional_daily_temp/'
 ```
 
 ## Read in temp data and make train-val-test
@@ -30,7 +30,7 @@ surf_temp <- NW_temp %>%
   filter(depth <= 1) %>% 
   arrange(depth) %>% 
   slice(1, .by = c(date, station)) %>% 
-  filter(station %in% c("CL-DAM1", "GL-MID", "GR-MID", "HT-SOL",  "SM-MID", "WC-DAM", "WG-DAM")) %>%
+  filter(station %in% c("CL-DAM1", "GL-MID", "GR-DAM", "HT-SOL",  "SM-MID", "WC-DAM", "WG-DAM")) %>%
   filter(date < ymd("2024-01-01")) 
 
 NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2024-10-15.csv')) %>% 
@@ -40,7 +40,7 @@ NW_estimates <- read_csv(file.path(rs_dir, 'SurfTemp_linearCorrection_v2024-10-1
                              feature == 'Carter Lake Reservoir' ~ 'Carter Lake',
                              feature == 'Shadow Mountain Lake' ~ 'Shadow Mountain Reservoir',
                              TRUE ~ feature)) %>% 
-  filter(station %in% c("CL-DAM1", "GL-MID", "GR-MID", "SM-MID", "HT-SOL") |
+  filter(station %in% c("CL-DAM1", "GL-MID", "GR-DAM", "SM-MID", "HT-SOL") |
            (is.na(station) &
               location_type == "poi_center" &
               feature %in% c("Boulder Reservoir", "Green Mountain Reservoir", "Lake Estes")))
