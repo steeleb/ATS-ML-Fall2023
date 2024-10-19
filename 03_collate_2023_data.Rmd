@@ -1,0 +1,60 @@
+---
+title: "Prep data for application 2020-2023"
+author: "ROSSyndicate"
+date: "2024-10-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(reticulate)
+library(kableExtra)
+library(feather)
+
+# file paths
+clim_dir = '~/OneDrive - Colostate/NASA-Northern/data/climate/aggregated/'
+res_dir = '~/OneDrive - Colostate/NASA-Northern/data/remoteSensing/estimates/'
+nn_dir = '~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/regional_daily_temp/'
+stat_dir = "~/OneDrive - Colostate/NASA-Northern/data/static_vars/"
+```
+
+Read in files
+
+```{r}
+clim_agg <- read_feather('~/Desktop/g_NLDAS_prev_day_summaries.feather') %>% 
+  pivot_longer(cols = c('tot_precip_mm', 'max_temp_degC', 'mean_temp_degC', 
+                        'min_temp_degC', 'tot_sol_rad_Wpm2', 'min_wind_mps',
+                        'mean_wind_mps', 'max_wind_mps'),
+               names_to = 'variable') %>% 
+  pivot_wider(names_from = c('variable', 'n_prev_days'),
+              names_sep = '_',
+              values_from = 'value') %>% 
+  mutate(feature = case_when(feature == "Boulder" ~ "Boulder Reservoir",
+                             feature == "Carter" ~ "Carter Lake",
+                             feature == "Grand" ~ "Grand Lake",
+                             feature == "GreenMountain" ~ "Green Mountain Reservoir",
+                             feature == "Horsetooth" ~ "Horsetooth Reservoir",
+                             feature == "Estes" ~ "Lake Estes",
+                             feature == "Granby" ~ "Granby Reservoir",
+                             feature == "ShadowMountain" ~ "Shadow Mountain Reservoir",
+                             feature == "WillowCreek" ~ "Willow Creek Reservoir",
+                             feature == "WindyGap" ~ "Windy Gap Reservoir",
+                             .default = feature))
+
+static <- read_csv(file.path(stat_dir, "static_vars.csv")) 
+```
+
+Collate and prep the dataset for application
+
+```{r}
+app_dataset <- left_join(static, clim_agg) 
+```
+
+Save the file!
+
+```{r}
+write_csv(app_dataset, file.path(nn_dir, "application/application_dataset_2023.csv"))
+```
+

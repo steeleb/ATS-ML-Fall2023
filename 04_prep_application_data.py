@@ -6,14 +6,14 @@ import pandas as pd
 import numpy as np
 from datetime import date
 
-file_path = os.path.expanduser("~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/")
+file_path = os.path.expanduser("~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/regional_daily_temp/")
 
 # import training data
-fn = os.path.join(file_path, "application/application_dataset_2020-2022_apr-nov.csv")
+fn = os.path.join(file_path, "application/application_dataset_2023.csv")
 with open(fn) as f:
     df = pd.read_csv(f, sep=',')
 
-fn = os.path.join(file_path, "mean_std_training_v2023-11-08.csv")
+fn = os.path.join(file_path, "mean_std_training_v2024-10-18.csv")
 with open(fn) as f:
     mean_std = pd.read_csv(f, sep=',')
 
@@ -50,11 +50,11 @@ def standardize_column(df, col_name, mean, std):
 
 # drop lake column
 df_short = df.copy()
-df_short = df_short.drop(columns = ["lake", "date"])
+df_short = df_short.drop(columns = ["feature", "date"])
 
 # apply standardize_column function to all columns of df
 df_standardized = df_short.apply(lambda col: standardize_column(df_short, col.name, mean_std.loc[col.name, 'mean'], mean_std.loc[col.name, 'std']))
 
 # save the file
-fn = os.path.join(file_path, "application/application_dataset_2020-2022_apr-nov_standardized.csv")
+fn = os.path.join(file_path, "application/application_dataset_2023_standardized.csv")
 df_standardized.to_csv(fn, index=False)
