@@ -1,0 +1,112 @@
+---
+title: "Collate and Visualize the daily temp data with manual sampling"
+author: "ROSSyndicate"
+date: "2024-12-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(ggthemes)
+
+# basic theme for all ggplots, if Roboto is not installed, just use default, but message
+if ({
+  require(systemfonts)
+  ("Roboto" %in% system_fonts()$family)
+}) {
+  ROSS_theme <- theme_bw() + #or theme_few()
+    theme(plot.title = element_text(hjust = 0.5, face = 'bold', family = "Roboto", size = 24),
+          plot.subtitle = element_text(hjust = 0.5, family = "Roboto", size = 20),
+          axis.title = element_text(family = "Roboto", size = 20),
+          strip.text = element_text(family = "Roboto", size = 16),
+          legend.text = element_text(family = "Roboto", size = 16),
+          legend.title = element_blank(),
+          axis.text = element_text(family = "Roboto", size = 16)) 
+} else {
+  message("You do not have the Roboto font family installed on your computer, currenly using ggplot default text family.
+          See ROSS_themes.R for directions to install the font family on your computer.")
+  ROSS_theme <- theme_bw() + #or theme_few()
+    theme(plot.title = element_text(hjust = 0.5, face = 'bold'),
+          plot.subtitle = element_text(hjust = 0.5)) 
+}
+
+app_dir = "~/OneDrive - Colostate/NASA-Northern/data/NN_train_val_test/regional_daily_temp/application/"
+```
+
+Read in the collated weather data and the predictions and join them by rowid
+
+```{r}
+obs_data <- read_csv("~/OneDrive - Colostate/NASA-Northern/data/waterQuality/harmonized/manual_temperature_data_NW_harmonized_2024-01-01.csv")
+
+pred_data <- read_csv(file.path(app_dir, "model_predictions_2023.csv")) %>% 
+  rowid_to_column() %>% 
+  select(-"...1") %>% 
+  select(feature, date, model_1, model_2, model_3, model_4)%>% 
+  filter(!is.na(model_1))
+
+unique(pred_data$feature)
+unique(obs_data$feature)
+
+these_res <- c("Grand Lake", "Horsetooth Reservoir", "Carter Lake")
+
+obs_less <- obs_data %>% 
+  filter(feature %in% these_res, depth < 1) %>% 
+  summarise(temp = mean(value),
+            .by = c(feature, date)) %>% 
+  mutate(source = 'measured')
+pred_less <- pred_data %>% 
+  filter(feature %in% these_res) %>%
+  rowwise() %>% 
+  mutate(temp = mean(c(model_1, model_2, model_3, model_4))) %>% 
+  ungroup() %>% 
+  select(-c(model_1:model_4)) %>% 
+  mutate(source = 'estimated daily')
+pred_ribbon <- pred_data %>% 
+  filter(feature %in% these_res) %>%
+  pivot_longer(cols = c(model_1, model_2, model_3, model_4),
+               names_to = 'model', 
+               values_to = 'value') %>% 
+  summarize(min_temp = min(value),
+            max_temp = max(value),
+            .by = c(feature, date))
+
+app_data <- full_join(obs_less, pred_less)
+```
+
+And plot data
+
+```{r}
+summer_app <- app_data %>% 
+  filter(between(date, ymd("2023-06-01"), ymd("2023-09-15"))) 
+summer_ribbon <- pred_ribbon %>% 
+  filter(between(date, ymd("2023-06-01"), ymd("2023-09-15"))) 
+
+ggplot() +
+  #geom_ribbon(data = summer_ribbon, aes(x = date, ymin = min_temp, ymax = max_temp), alpha = 0.3) +
+  geom_point(data = summer_app, aes(x = date, y = temp, color = source)) +
+  facet_grid(feature ~ .) +
+  labs(x = NULL, y = 'surface water temperature °C')  +
+  ROSS_theme +
+  scale_x_date(limits = c(ymd("2023-06-01"), ymd("2023-09-15"))) +
+  scale_y_continuous(limits = c(10, 26)) +
+  theme(legend.position = 'bottom') +
+  scale_color_manual(values = c("#E70870", "#256BF5", 
+                                "#745CFB", "#1E4D2B", "#56104E"))
+
+
+ggplot() +
+  #geom_ribbon(data = summer_ribbon, aes(x = date, ymin = min_temp, ymax = max_temp), alpha = 0.3) +
+  geom_point(data = summer_app %>% filter(source == "measured"), aes(x = date, y = temp, color = source)) +
+  facet_grid(feature ~ .) +
+  labs(x = NULL, y = 'surface water temperature °C')  +
+  ROSS_theme +
+  theme(legend.position = 'bottom') +
+  scale_x_date(limits = c(ymd("2023-06-01"), ymd("2023-09-15"))) +
+  scale_y_continuous(limits = c(10, 26)) +
+  scale_color_manual(values = c("#256BF5", 
+                                "#745CFB", "#1E4D2B", "#56104E"))
+
+```
+
